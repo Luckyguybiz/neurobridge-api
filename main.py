@@ -45,6 +45,16 @@ from analysis.phase_transitions import detect_phase_transitions
 from analysis.predictive_coding import measure_predictive_coding
 from analysis.weight_inference import infer_synaptic_weights, track_weight_changes
 from analysis.multiscale import compute_multiscale_complexity
+from analysis.sleep_wake import analyze_sleep_wake
+from analysis.habituation import detect_repeated_patterns
+from analysis.metastability import analyze_metastability
+from analysis.information_flow import compute_granger_causality
+from analysis.network_motifs import enumerate_motifs
+from analysis.energy_landscape import fit_ising_model
+from analysis.stimulus_design import evolve_protocol
+from analysis.consciousness_metrics import compute_consciousness_score
+from analysis.comparative import compare_with_references
+from analysis.protocol_library import list_protocols, get_protocol, suggest_protocol
 from models.schemas import (
     SpikeDetectionParams, BurstDetectionParams, SpikeSortingParams,
     ConnectivityParams, TimeRangeFilter, DatasetInfo,
@@ -647,6 +657,122 @@ async def full_report(dataset_id: str):
     data = _get_dataset(dataset_id)
     report = generate_full_report(data)
     return _sanitize(report)
+
+
+# ═══════════ DISCOVERY ANALYSIS ═══════════
+
+@app.get("/api/analysis/{dataset_id}/sleep-wake")
+async def api_sleep_wake(dataset_id: str):
+    """Detect sleep-wake-like cycles in organoid activity."""
+    data = _get_dataset(dataset_id)
+    t0 = time.time()
+    result = analyze_sleep_wake(data)
+    result["_computation_time_ms"] = (time.time() - t0) * 1000
+    return _sanitize(result)
+
+
+@app.get("/api/analysis/{dataset_id}/habituation")
+async def api_habituation(dataset_id: str):
+    """Detect habituation — response decay to repeated patterns."""
+    data = _get_dataset(dataset_id)
+    t0 = time.time()
+    result = detect_repeated_patterns(data)
+    result["_computation_time_ms"] = (time.time() - t0) * 1000
+    return _sanitize(result)
+
+
+@app.get("/api/analysis/{dataset_id}/metastability")
+async def api_metastability(dataset_id: str):
+    """Analyze metastability — brain-like state switching dynamics."""
+    data = _get_dataset(dataset_id)
+    t0 = time.time()
+    result = analyze_metastability(data)
+    result["_computation_time_ms"] = (time.time() - t0) * 1000
+    return _sanitize(result)
+
+
+@app.get("/api/analysis/{dataset_id}/information-flow")
+async def api_information_flow(dataset_id: str):
+    """Map directed information flow using Granger causality."""
+    data = _get_dataset(dataset_id)
+    t0 = time.time()
+    result = compute_granger_causality(data)
+    result["_computation_time_ms"] = (time.time() - t0) * 1000
+    return _sanitize(result)
+
+
+@app.get("/api/analysis/{dataset_id}/motifs")
+async def api_motifs(dataset_id: str):
+    """Enumerate network motifs (3-node subgraph patterns)."""
+    data = _get_dataset(dataset_id)
+    t0 = time.time()
+    result = enumerate_motifs(data)
+    result["_computation_time_ms"] = (time.time() - t0) * 1000
+    return _sanitize(result)
+
+
+@app.get("/api/analysis/{dataset_id}/energy-landscape")
+async def api_energy_landscape(dataset_id: str):
+    """Compute Ising model energy landscape."""
+    data = _get_dataset(dataset_id)
+    t0 = time.time()
+    result = fit_ising_model(data)
+    result["_computation_time_ms"] = (time.time() - t0) * 1000
+    return _sanitize(result)
+
+
+@app.post("/api/analysis/{dataset_id}/design-stimulus")
+async def api_design_stimulus(dataset_id: str, generations: int = 30, population_size: int = 15):
+    """Evolve optimal stimulation protocol using digital twin."""
+    data = _get_dataset(dataset_id)
+    t0 = time.time()
+    result = evolve_protocol(data, generations=generations, population_size=population_size)
+    result["_computation_time_ms"] = (time.time() - t0) * 1000
+    return _sanitize(result)
+
+
+@app.get("/api/analysis/{dataset_id}/consciousness")
+async def api_consciousness(dataset_id: str):
+    """Composite consciousness assessment score."""
+    data = _get_dataset(dataset_id)
+    t0 = time.time()
+    result = compute_consciousness_score(data)
+    result["_computation_time_ms"] = (time.time() - t0) * 1000
+    return _sanitize(result)
+
+
+@app.get("/api/analysis/{dataset_id}/comparative")
+async def api_comparative(dataset_id: str):
+    """Compare organoid with reference neural systems."""
+    data = _get_dataset(dataset_id)
+    t0 = time.time()
+    result = compare_with_references(data)
+    result["_computation_time_ms"] = (time.time() - t0) * 1000
+    return _sanitize(result)
+
+
+# ═══════════ PROTOCOLS ═══════════
+
+@app.get("/api/protocols")
+async def api_protocols():
+    """List all available stimulation protocols."""
+    return list_protocols()
+
+
+@app.get("/api/protocols/{name}")
+async def api_protocol_detail(name: str):
+    """Get full protocol details by name."""
+    result = get_protocol(name)
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result
+
+
+@app.get("/api/analysis/{dataset_id}/suggest-protocol")
+async def api_suggest_protocol(dataset_id: str):
+    """Suggest best protocol based on organoid state."""
+    data = _get_dataset(dataset_id)
+    return suggest_protocol(data)
 
 
 # ═══════════ EXPORT ═══════════
