@@ -60,6 +60,11 @@ from analysis.curriculum import run_curriculum
 from analysis.memory_tests import run_memory_battery
 from analysis.pong_engine import simulate_pong
 from analysis.xor_benchmark import run_full_benchmark
+from analysis.japanese_vowels import run_vowel_recognition
+from analysis.experiment_tracker import create_experiment, list_experiments, compute_delta_report
+from analysis.publication_generator import generate_draft
+from analysis.ethical_assessment import assess_ethics
+from analysis.grant_matcher import match_grants
 from models.schemas import (
     SpikeDetectionParams, BurstDetectionParams, SpikeSortingParams,
     ConnectivityParams, TimeRangeFilter, DatasetInfo,
@@ -839,6 +844,55 @@ async def api_logic(dataset_id: str):
     result = run_full_benchmark(data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
     return _sanitize(result)
+
+
+@app.post("/api/experiments/{dataset_id}/vowels/simulate")
+async def api_vowels(dataset_id: str):
+    """Simulate Brainoware vowel recognition (reservoir computing)."""
+    data = _get_dataset(dataset_id)
+    t0 = time.time()
+    result = run_vowel_recognition(data)
+    result["_computation_time_ms"] = (time.time() - t0) * 1000
+    return _sanitize(result)
+
+
+@app.get("/api/experiments/track/history")
+async def api_experiment_history():
+    """List all tracked experiments."""
+    return list_experiments()
+
+
+@app.post("/api/publish/draft/{dataset_id}")
+async def api_publish_draft(dataset_id: str):
+    """Generate paper draft from analysis results."""
+    data = _get_dataset(dataset_id)
+    t0 = time.time()
+    result = generate_draft(data)
+    result["_computation_time_ms"] = (time.time() - t0) * 1000
+    return _sanitize(result)
+
+
+@app.get("/api/analysis/{dataset_id}/ethics")
+async def api_ethics(dataset_id: str):
+    """Ethical assessment of organoid experiment."""
+    data = _get_dataset(dataset_id)
+    t0 = time.time()
+    result = assess_ethics(data)
+    result["_computation_time_ms"] = (time.time() - t0) * 1000
+    return _sanitize(result)
+
+
+@app.get("/api/funding/match")
+async def api_funding_match():
+    """Find matching grants for biocomputing research."""
+    return match_grants()
+
+
+@app.get("/api/funding/match/{dataset_id}")
+async def api_funding_match_with_data(dataset_id: str):
+    """Find matching grants based on organoid data."""
+    data = _get_dataset(dataset_id)
+    return match_grants(data)
 
 
 # ═══════════ EXPORT ═══════════
