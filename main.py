@@ -55,6 +55,11 @@ from analysis.stimulus_design import evolve_protocol
 from analysis.consciousness_metrics import compute_consciousness_score
 from analysis.comparative import compare_with_references
 from analysis.protocol_library import list_protocols, get_protocol, suggest_protocol
+from analysis.closed_loop import run_dishbrain_session, compare_reward_strategies
+from analysis.curriculum import run_curriculum
+from analysis.memory_tests import run_memory_battery
+from analysis.pong_engine import simulate_pong
+from analysis.xor_benchmark import run_full_benchmark
 from models.schemas import (
     SpikeDetectionParams, BurstDetectionParams, SpikeSortingParams,
     ConnectivityParams, TimeRangeFilter, DatasetInfo,
@@ -773,6 +778,67 @@ async def api_suggest_protocol(dataset_id: str):
     """Suggest best protocol based on organoid state."""
     data = _get_dataset(dataset_id)
     return suggest_protocol(data)
+
+
+# ═══════════ EXPERIMENTS ═══════════
+
+@app.post("/api/experiments/{dataset_id}/closed-loop/simulate")
+async def api_closed_loop(dataset_id: str, n_trials: int = 100):
+    """Run closed-loop DishBrain simulation on digital twin."""
+    data = _get_dataset(dataset_id)
+    t0 = time.time()
+    result = run_dishbrain_session(data, n_trials=n_trials)
+    result["_computation_time_ms"] = (time.time() - t0) * 1000
+    return _sanitize(result)
+
+
+@app.get("/api/experiments/closed-loop/strategies")
+async def api_strategies():
+    """List available reward strategies."""
+    return {
+        "strategies": ["electrical", "dopamine", "glutamate", "nmda", "combined"],
+        "default": "electrical",
+    }
+
+
+@app.post("/api/experiments/{dataset_id}/curriculum/generate")
+async def api_curriculum(dataset_id: str):
+    """Generate a learning curriculum for the organoid."""
+    data = _get_dataset(dataset_id)
+    t0 = time.time()
+    result = run_curriculum(data)
+    result["_computation_time_ms"] = (time.time() - t0) * 1000
+    return _sanitize(result)
+
+
+@app.get("/api/experiments/{dataset_id}/memory-tests")
+async def api_memory_tests(dataset_id: str):
+    """Run battery of memory tests."""
+    data = _get_dataset(dataset_id)
+    t0 = time.time()
+    result = run_memory_battery(data)
+    result["_computation_time_ms"] = (time.time() - t0) * 1000
+    return _sanitize(result)
+
+
+@app.post("/api/experiments/{dataset_id}/pong/simulate")
+async def api_pong(dataset_id: str, n_trials: int = 200):
+    """Simulate Pong game on digital twin."""
+    data = _get_dataset(dataset_id)
+    t0 = time.time()
+    result = simulate_pong(data, n_trials=n_trials)
+    result["_computation_time_ms"] = (time.time() - t0) * 1000
+    return _sanitize(result)
+
+
+@app.post("/api/experiments/{dataset_id}/logic/benchmark")
+async def api_logic(dataset_id: str):
+    """Run XOR and logic gate benchmark suite."""
+    data = _get_dataset(dataset_id)
+    t0 = time.time()
+    result = run_full_benchmark(data)
+    result["_computation_time_ms"] = (time.time() - t0) * 1000
+    return _sanitize(result)
 
 
 # ═══════════ EXPORT ═══════════
