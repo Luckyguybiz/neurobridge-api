@@ -55,16 +55,16 @@ from analysis.stimulus_design import evolve_protocol
 from analysis.consciousness_metrics import compute_consciousness_score
 from analysis.comparative import compare_with_references
 from analysis.protocol_library import list_protocols, get_protocol, suggest_protocol
-from analysis.closed_loop import run_dishbrain_session, compare_reward_strategies
-from analysis.curriculum import run_curriculum
-from analysis.memory_tests import run_memory_battery
-from analysis.pong_engine import simulate_pong
-from analysis.xor_benchmark import run_full_benchmark
-from analysis.japanese_vowels import run_vowel_classification
-from analysis.experiment_tracker import start_experiment, get_history as get_experiment_history
-from analysis.publication_generator import generate_draft
-from analysis.ethical_assessment import assess_ethics
-from analysis.grant_matcher import match_grants
+from analysis.closed_loop import run_dishbrain_session, run_cartpole_benchmark, compare_reward_strategies
+from analysis.curriculum import run_curriculum, get_current_stage, simulate_stage
+from analysis.memory_tests import run_memory_battery, test_working_memory, test_short_term_memory, test_long_term_memory, test_associative_memory
+from analysis.pong_engine import simulate_pong, encode_ball_state
+from analysis.xor_benchmark import run_full_benchmark, run_gate_benchmark, compute_xor_difficulty
+from analysis.japanese_vowels import generate_synthetic_vowels, build_reservoir, reservoir_transform, train_linear_readout
+from analysis.experiment_tracker import start_experiment, end_experiment, get_experiment as tracker_get_experiment, get_history as get_experiment_history, compute_delta as tracker_compute_delta, clear_experiments as tracker_clear_experiments
+from analysis.publication_generator import generate_draft, generate_abstract_only, generate_methods_section
+from analysis.ethical_assessment import assess_ethics, assess_consciousness_indicators, compute_sentience_risk_score
+from analysis.grant_matcher import match_grants, get_grant_details, list_grants
 from models.schemas import (
     SpikeDetectionParams, BurstDetectionParams, SpikeSortingParams,
     ConnectivityParams, TimeRangeFilter, DatasetInfo,
@@ -787,112 +787,382 @@ async def api_suggest_protocol(dataset_id: str):
 
 # ═══════════ EXPERIMENTS ═══════════
 
-@app.post("/api/experiments/{dataset_id}/closed-loop/simulate")
-async def api_closed_loop(dataset_id: str, n_trials: int = 100):
-    """Run closed-loop DishBrain simulation on digital twin."""
+# ═══════════ CLOSED-LOOP EXPERIMENTS ═══════════
+
+@app.get("/api/experiments/{dataset_id}/closed-loop")
+async def api_closed_loop(
+    dataset_id: str,
+    n_episodes: int = Query(20, ge=1, le=100),
+    reward_strategy: str = Query("hebbian"),
+    game: str = Query("pong"),
+):
+    """Run DishBrain-style closed-loop session (pong or cartpole)."""
     data = _get_dataset(dataset_id)
     t0 = time.time()
-    result = run_dishbrain_session(data, n_trials=n_trials)
-    result["_computation_time_ms"] = (time.time() - t0) * 1000
+    result = run_dishbrain_session(data, n_episodes=n_episodes, reward_strategy=reward_strategy, game=game)
+    result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
     return _sanitize(result)
 
 
-@app.get("/api/experiments/closed-loop/strategies")
-async def api_strategies():
-    """List available reward strategies."""
-    return {
-        "strategies": ["electrical", "dopamine", "glutamate", "nmda", "combined"],
-        "default": "electrical",
-    }
+@app.get("/api/experiments/{dataset_id}/closed-loop/cartpole")
+async def api_cartpole(
+    dataset_id: str,
+    n_trials: int = Query(50, ge=1, le=200),
+    reward_strategy: str = Query("dopamine"),
+):
+    """CartPole benchmark adapted for biological neural networks."""
+    data = _get_dataset(dataset_id)
+    t0 = time.time()
+    result = run_cartpole_benchmark(data, n_trials=n_trials, reward_strategy=reward_strategy)
+    result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
+    return _sanitize(result)
 
 
-@app.post("/api/experiments/{dataset_id}/curriculum/generate")
+@app.get("/api/experiments/{dataset_id}/closed-loop/strategies")
+async def api_compare_strategies(dataset_id: str, n_episodes: int = Query(15, ge=5, le=50)):
+    """Compare all 4 reward strategies (hebbian/dopamine/contrastive/reinforce)."""
+    data = _get_dataset(dataset_id)
+    t0 = time.time()
+    result = compare_reward_strategies(data, n_episodes=n_episodes)
+    result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
+    return _sanitize(result)
+
+
+# ═══════════ CURRICULUM LEARNING ═══════════
+
+@app.get("/api/experiments/{dataset_id}/curriculum")
 async def api_curriculum(dataset_id: str):
-    """Generate a learning curriculum for the organoid."""
+    """Run full 4-stage adaptive curriculum learning protocol."""
     data = _get_dataset(dataset_id)
     t0 = time.time()
     result = run_curriculum(data)
-    result["_computation_time_ms"] = (time.time() - t0) * 1000
+    result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
     return _sanitize(result)
 
 
-@app.get("/api/experiments/{dataset_id}/memory-tests")
-async def api_memory_tests(dataset_id: str):
-    """Run battery of memory tests."""
+@app.get("/api/experiments/{dataset_id}/curriculum/stage")
+async def api_curriculum_stage(dataset_id: str):
+    """Assess which curriculum stage the organoid is ready for."""
+    data = _get_dataset(dataset_id)
+    return _sanitize(get_current_stage(data))
+
+
+@app.get("/api/experiments/{dataset_id}/curriculum/simulate")
+async def api_curriculum_simulate(
+    dataset_id: str,
+    stage: int = Query(1, ge=1, le=4),
+    n_trials: int = Query(30, ge=10, le=100),
+):
+    """Simulate a single curriculum stage with trial-by-trial output."""
+    data = _get_dataset(dataset_id)
+    t0 = time.time()
+    result = simulate_stage(data, stage=stage, n_trials=n_trials)
+    result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
+    return _sanitize(result)
+
+
+# ═══════════ MEMORY BATTERY ═══════════
+
+@app.get("/api/experiments/{dataset_id}/memory")
+async def api_memory_battery(dataset_id: str):
+    """Run complete memory battery: working + short-term + long-term + associative."""
     data = _get_dataset(dataset_id)
     t0 = time.time()
     result = run_memory_battery(data)
-    result["_computation_time_ms"] = (time.time() - t0) * 1000
+    result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
     return _sanitize(result)
 
 
-@app.post("/api/experiments/{dataset_id}/pong/simulate")
-async def api_pong(dataset_id: str, n_trials: int = 200):
-    """Simulate Pong game on digital twin."""
+@app.get("/api/experiments/{dataset_id}/memory/working")
+async def api_memory_working(dataset_id: str, n_trials: int = Query(40, ge=10, le=100)):
+    """Delay-match-to-sample working memory test."""
+    data = _get_dataset(dataset_id)
+    return _sanitize(test_working_memory(data, n_trials=n_trials))
+
+
+@app.get("/api/experiments/{dataset_id}/memory/short-term")
+async def api_memory_stm(dataset_id: str, max_span: int = Query(9, ge=3, le=15)):
+    """Serial-span short-term memory test."""
+    data = _get_dataset(dataset_id)
+    return _sanitize(test_short_term_memory(data, max_span=max_span))
+
+
+@app.get("/api/experiments/{dataset_id}/memory/long-term")
+async def api_memory_ltm(dataset_id: str, n_patterns: int = Query(5, ge=2, le=20)):
+    """Spaced-retention long-term memory test."""
+    data = _get_dataset(dataset_id)
+    return _sanitize(test_long_term_memory(data, n_patterns=n_patterns))
+
+
+@app.get("/api/experiments/{dataset_id}/memory/associative")
+async def api_memory_am(dataset_id: str, n_pairs: int = Query(6, ge=2, le=20)):
+    """Paired-associate / Hopfield-style associative memory test."""
+    data = _get_dataset(dataset_id)
+    return _sanitize(test_associative_memory(data, n_pairs=n_pairs))
+
+
+# ═══════════ PONG ENGINE ═══════════
+
+@app.get("/api/experiments/{dataset_id}/pong")
+async def api_pong(
+    dataset_id: str,
+    n_games: int = Query(20, ge=1, le=100),
+    encoding: str = Query("rate"),
+    decoding: str = Query("population_vector"),
+    reward_rule: str = Query("dishbrain"),
+):
+    """Simulate N games of Pong using organoid spike data as controller."""
     data = _get_dataset(dataset_id)
     t0 = time.time()
-    result = simulate_pong(data, n_trials=n_trials)
-    result["_computation_time_ms"] = (time.time() - t0) * 1000
+    result = simulate_pong(data, n_games=n_games, encoding=encoding, decoding=decoding, reward_rule=reward_rule)
+    result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
     return _sanitize(result)
 
 
-@app.post("/api/experiments/{dataset_id}/logic/benchmark")
-async def api_logic(dataset_id: str):
-    """Run XOR and logic gate benchmark suite."""
+@app.get("/api/experiments/pong/encode")
+async def api_pong_encode(
+    ball_x: float = Query(0.5, ge=0.0, le=1.0),
+    ball_y: float = Query(0.5, ge=0.0, le=1.0),
+    ball_vx: float = Query(0.05),
+    ball_vy: float = Query(0.02),
+    n_electrodes: int = Query(8, ge=2, le=64),
+    encoding: str = Query("rate"),
+):
+    """Compute stimulation pattern for a given Pong ball state."""
+    return _sanitize(encode_ball_state(ball_x, ball_y, ball_vx, ball_vy, n_electrodes, encoding))
+
+
+# ═══════════ XOR BENCHMARK ═══════════
+
+@app.get("/api/experiments/{dataset_id}/xor")
+async def api_xor_benchmark(
+    dataset_id: str,
+    n_trials_per_gate: int = Query(60, ge=20, le=200),
+    readout: str = Query("logistic"),
+):
+    """Run full logical gate benchmark suite (AND, OR, XOR, NAND, XNOR)."""
     data = _get_dataset(dataset_id)
     t0 = time.time()
-    result = run_full_benchmark(data)
-    result["_computation_time_ms"] = (time.time() - t0) * 1000
+    result = run_full_benchmark(data, n_trials_per_gate=n_trials_per_gate, readout=readout)
+    result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
     return _sanitize(result)
 
 
-@app.post("/api/experiments/{dataset_id}/vowels/simulate")
-async def api_vowels(dataset_id: str):
-    """Simulate Brainoware vowel recognition (reservoir computing)."""
+@app.get("/api/experiments/{dataset_id}/xor/gate")
+async def api_xor_gate(
+    dataset_id: str,
+    gate: str = Query("XOR"),
+    n_trials: int = Query(60, ge=20, le=200),
+    readout: str = Query("logistic"),
+):
+    """Run a single logical gate benchmark."""
     data = _get_dataset(dataset_id)
     t0 = time.time()
-    result = run_vowel_classification(data)
-    result["_computation_time_ms"] = (time.time() - t0) * 1000
+    result = run_gate_benchmark(data, gate=gate.upper(), n_trials=n_trials, readout=readout)
+    result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
     return _sanitize(result)
 
 
-@app.get("/api/experiments/track/history")
-async def api_experiment_history():
+@app.get("/api/experiments/{dataset_id}/xor/difficulty")
+async def api_xor_difficulty(dataset_id: str):
+    """Estimate XOR difficulty for this organoid (Fisher discriminant)."""
+    data = _get_dataset(dataset_id)
+    return _sanitize(compute_xor_difficulty(data))
+
+
+# ═══════════ JAPANESE VOWELS ═══════════
+
+@app.get("/api/experiments/vowels/classify")
+async def api_vowels_classify(
+    n_samples: int = Query(240, ge=40, le=1000),
+    n_classes: int = Query(8, ge=2, le=8),
+    reservoir_size: int = Query(256, ge=64, le=1024),
+    spectral_radius: float = Query(0.9, ge=0.1, le=1.5),
+    seed: int = Query(42),
+):
+    """Run Brainoware-inspired vowel recognition via reservoir computing.
+
+    Generates synthetic Japanese vowel features, processes through
+    an echo-state reservoir, and trains a linear readout classifier.
+    """
+    t0 = time.time()
+    vowels = generate_synthetic_vowels(n_samples=n_samples, n_classes=n_classes, seed=seed)
+    reservoir = build_reservoir(
+        input_dim=vowels["n_features"],
+        reservoir_size=reservoir_size,
+        spectral_radius=spectral_radius,
+        seed=seed,
+    )
+    states = reservoir_transform(vowels["features"], reservoir)
+    readout = train_linear_readout(states, vowels["labels"], n_classes=n_classes)
+    result = {
+        "task": "japanese_vowel_recognition",
+        "n_samples": vowels["n_samples"],
+        "n_classes": n_classes,
+        "class_names": vowels["class_names"],
+        "reservoir_size": reservoir_size,
+        "spectral_radius": spectral_radius,
+        "train_accuracy": readout["train_accuracy"],
+        "test_accuracy": readout["test_accuracy"],
+        "per_class_metrics": readout["per_class"],
+        "n_train": readout["n_train"],
+        "n_test": readout["n_test"],
+        "above_chance": round(readout["test_accuracy"] - 1.0 / n_classes, 3),
+        "_computation_time_ms": round((time.time() - t0) * 1000, 1),
+        "interpretation": (
+            f"Vowel recognition: {readout['test_accuracy']:.1%} accuracy "
+            f"({readout['test_accuracy'] - 1/n_classes:+.1%} vs chance). "
+            + ("Replicates Brainoware result!" if readout["test_accuracy"] > 0.7
+               else "Above chance — reservoir dynamics separate vowel classes."
+               if readout["test_accuracy"] > 1 / n_classes + 0.1
+               else "Near chance — try larger reservoir or more samples.")
+        ),
+    }
+    return _sanitize(result)
+
+
+# ═══════════ EXPERIMENT TRACKER ═══════════
+
+@app.post("/api/experiments/tracker/{experiment_id}/start/{dataset_id}")
+async def api_tracker_start(
+    experiment_id: str,
+    dataset_id: str,
+    name: Optional[str] = None,
+    experiment_type: str = Query("stimulation"),
+):
+    """Start a new experiment — record pre-intervention baseline."""
+    data = _get_dataset(dataset_id)
+    return _sanitize(start_experiment(experiment_id, data, name=name, experiment_type=experiment_type))
+
+
+@app.post("/api/experiments/tracker/{experiment_id}/end/{dataset_id}")
+async def api_tracker_end(
+    experiment_id: str,
+    dataset_id: str,
+    notes: Optional[str] = None,
+):
+    """End experiment — record post-intervention and compute delta."""
+    data = _get_dataset(dataset_id)
+    return _sanitize(end_experiment(experiment_id, data, notes=notes))
+
+
+@app.get("/api/experiments/tracker/{experiment_id}")
+async def api_tracker_get(experiment_id: str):
+    """Get full experiment record including delta analysis."""
+    result = tracker_get_experiment(experiment_id)
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+    return _sanitize(result)
+
+
+@app.get("/api/experiments/tracker")
+async def api_tracker_history(
+    experiment_type: Optional[str] = None,
+    status: Optional[str] = None,
+):
     """List all tracked experiments."""
-    return get_experiment_history()
+    return _sanitize(get_experiment_history(experiment_type=experiment_type, status=status))
 
 
-@app.post("/api/publish/draft/{dataset_id}")
+@app.post("/api/experiments/tracker/compare/{pre_dataset_id}/{post_dataset_id}")
+async def api_tracker_delta(pre_dataset_id: str, post_dataset_id: str):
+    """Compute pre/post delta between two datasets without creating an experiment."""
+    pre = _get_dataset(pre_dataset_id)
+    post = _get_dataset(post_dataset_id)
+    return _sanitize(tracker_compute_delta(pre, post))
+
+
+# ═══════════ PUBLICATION GENERATOR ═══════════
+
+@app.post("/api/publish/{dataset_id}")
 async def api_publish_draft(dataset_id: str):
-    """Generate paper draft from analysis results."""
+    """Generate full paper draft (title, abstract, methods, results, discussion)."""
     data = _get_dataset(dataset_id)
     t0 = time.time()
     result = generate_draft(data, analyses={})
-    result["_computation_time_ms"] = (time.time() - t0) * 1000
+    result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
     return _sanitize(result)
 
+
+@app.post("/api/publish/{dataset_id}/abstract")
+async def api_publish_abstract(dataset_id: str):
+    """Generate abstract only — fast 250-word structured abstract."""
+    data = _get_dataset(dataset_id)
+    return _sanitize(generate_abstract_only(data, analyses={}))
+
+
+@app.post("/api/publish/{dataset_id}/methods")
+async def api_publish_methods(dataset_id: str):
+    """Generate methods section only."""
+    data = _get_dataset(dataset_id)
+    return _sanitize(generate_methods_section(data, analyses={}))
+
+
+# ═══════════ ETHICS ═══════════
 
 @app.get("/api/analysis/{dataset_id}/ethics")
-async def api_ethics(dataset_id: str):
-    """Ethical assessment of organoid experiment."""
+async def api_ethics(
+    dataset_id: str,
+    culture_age_days: Optional[int] = None,
+    organoid_type: Optional[str] = None,
+):
+    """Full ethical assessment: consciousness indicators, sentience risk, guidelines, compliance."""
     data = _get_dataset(dataset_id)
     t0 = time.time()
-    result = assess_ethics(data)
-    result["_computation_time_ms"] = (time.time() - t0) * 1000
+    result = assess_ethics(data, culture_age_days=culture_age_days, organoid_type=organoid_type)
+    result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
     return _sanitize(result)
 
 
+@app.get("/api/analysis/{dataset_id}/consciousness")
+async def api_consciousness_indicators(dataset_id: str):
+    """Consciousness proxy indicators: Phi, global workspace, criticality, complexity."""
+    data = _get_dataset(dataset_id)
+    return _sanitize(assess_consciousness_indicators(data))
+
+
+@app.get("/api/analysis/{dataset_id}/sentience-risk")
+async def api_sentience_risk(dataset_id: str):
+    """Sentience risk score: nociception proxy, stress, valence, distress signals."""
+    data = _get_dataset(dataset_id)
+    return _sanitize(compute_sentience_risk_score(data))
+
+
+# ═══════════ FUNDING ═══════════
+
 @app.get("/api/funding/match")
-async def api_funding_match():
-    """Find matching grants for biocomputing research."""
-    return match_grants()
+async def api_funding_match(
+    country_filter: Optional[str] = None,
+    min_funding_usd: Optional[int] = None,
+):
+    """Find matching grants (NSF, NIH, DARPA, EU Horizon, Astana Hub, IndieBio…)."""
+    return _sanitize(match_grants(data=None, analyses={}, country_filter=country_filter, min_funding_usd=min_funding_usd))
 
 
 @app.get("/api/funding/match/{dataset_id}")
-async def api_funding_match_with_data(dataset_id: str):
-    """Find matching grants based on organoid data."""
+async def api_funding_match_with_data(
+    dataset_id: str,
+    country_filter: Optional[str] = None,
+    min_funding_usd: Optional[int] = None,
+):
+    """Match grants using actual organoid data for scoring."""
     data = _get_dataset(dataset_id)
-    return match_grants(data)
+    return _sanitize(match_grants(data=data, analyses={}, country_filter=country_filter, min_funding_usd=min_funding_usd))
+
+
+@app.get("/api/funding/grants")
+async def api_funding_list(country_filter: Optional[str] = None):
+    """List all available grant programs."""
+    return _sanitize(list_grants(country_filter=country_filter))
+
+
+@app.get("/api/funding/grants/{grant_id}")
+async def api_funding_grant_detail(grant_id: str):
+    """Get full details for a specific grant program."""
+    result = get_grant_details(grant_id)
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+    return _sanitize(result)
 
 
 # ═══════════ EXPORT ═══════════
