@@ -1,0 +1,28 @@
+# Web framework
+fastapi==0.115.0
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+
+# Data processing
+numpy>=2.0
+scipy>=1.13
+pandas>=2.2
+h5py>=3.11
+
+# Neuroscience
+neo>=0.14.0
+elephant>=1.1.0
+quantities>=0.16
+
+# ML / Analysis
+scikit-learn>=1.5
+hdbscan>=0.8.33
+
+# Visualization (server-side figure generation)
+matplotlib>=3.9
+
+# Utilities
+pydantic>=2.9
+orjson>=3.10
+python-dotenv>=1.0
+aiofiles>=24.1
