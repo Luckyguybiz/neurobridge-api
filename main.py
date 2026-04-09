@@ -60,8 +60,8 @@ from analysis.curriculum import run_curriculum
 from analysis.memory_tests import run_memory_battery
 from analysis.pong_engine import simulate_pong
 from analysis.xor_benchmark import run_full_benchmark
-from analysis.japanese_vowels import run_vowel_recognition
-from analysis.experiment_tracker import create_experiment, list_experiments, compute_delta_report
+from analysis.japanese_vowels import run_vowel_classification
+from analysis.experiment_tracker import start_experiment, get_history as get_experiment_history
 from analysis.publication_generator import generate_draft
 from analysis.ethical_assessment import assess_ethics
 from analysis.grant_matcher import match_grants
@@ -851,7 +851,7 @@ async def api_vowels(dataset_id: str):
     """Simulate Brainoware vowel recognition (reservoir computing)."""
     data = _get_dataset(dataset_id)
     t0 = time.time()
-    result = run_vowel_recognition(data)
+    result = run_vowel_classification(data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
     return _sanitize(result)
 
@@ -859,7 +859,7 @@ async def api_vowels(dataset_id: str):
 @app.get("/api/experiments/track/history")
 async def api_experiment_history():
     """List all tracked experiments."""
-    return list_experiments()
+    return get_experiment_history()
 
 
 @app.post("/api/publish/draft/{dataset_id}")
@@ -867,7 +867,7 @@ async def api_publish_draft(dataset_id: str):
     """Generate paper draft from analysis results."""
     data = _get_dataset(dataset_id)
     t0 = time.time()
-    result = generate_draft(data)
+    result = generate_draft(data, analyses={})
     result["_computation_time_ms"] = (time.time() - t0) * 1000
     return _sanitize(result)
 

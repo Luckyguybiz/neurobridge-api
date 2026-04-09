@@ -1,27 +1,28 @@
-"""Japanese Vowels Recognition — Brainoware-inspired Speech Task.
+"""Brainoware-inspired Japanese Vowels classification via reservoir computing.
 
-Replicates the Brainoware experiment (Cai et al. 2023, Nature Electronics):
-Human brain organoids were trained to recognize Japanese vowels from
-electroencephalographic recordings.
+Scientific basis:
+    Cai et al. (2023) "Brainoware" demonstrated that brain organoids can
+    perform voice recognition using reservoir computing. The organoid acts
+    as a nonlinear dynamical reservoir: input signals are projected into
+    the organoid's high-dimensional state space, and a simple linear
+    readout is trained on the resulting neural activity.
 
-Dataset: 240 audio samples (5 Japanese vowels: a, i, u, e, o)
-         × 48 samples per vowel (simulated from electrode patterns)
+    The Japanese Vowels dataset (UCI ML Repository) contains 640 samples
+    of 9 speakers uttering Japanese vowels, represented as 12-dimensional
+    LPC cepstral coefficients across variable-length time frames.
 
-Pipeline:
-1. Convert audio features (MFCC-like) to electrode stimulation patterns
-2. Use organoid spike response as reservoir state
-3. Train linear readout on reservoir states (reservoir computing paradigm)
-4. Compare: organoid reservoir vs random reservoir vs linear baseline
+    This module simulates the Brainoware approach:
+    1. Generate 240 synthetic vowel feature vectors (8 classes: /a/, /i/,
+       /u/, /e/, /o/, /ka/, /ki/, /ku/) with realistic spectral properties.
+    2. Use a random reservoir (simulating the organoid's fixed dynamics)
+       to project inputs into a higher-dimensional space.
+    3. Train a linear readout layer (ridge regression) for classification.
+    4. Evaluate accuracy and per-class performance.
 
-Key finding from Brainoware: organoids outperformed random reservoirs
-and showed progressive improvement over 4 days of training.
-
-Vowel encodings (formant frequencies):
-  a (あ): F1≈800Hz, F2≈1200Hz — wide open
-  i (い): F1≈300Hz, F2≈2200Hz — high front
-  u (う): F1≈350Hz, F2≈1000Hz — high back
-  e (え): F1≈500Hz, F2≈1800Hz — mid front
-  o (お): F1≈500Hz, F2≈900Hz  — mid back
+    The reservoir's random projection matrix simulates the organoid's
+    inherent nonlinear transformation of input signals. The key insight
+    is that biological neural networks provide rich, nonlinear dynamics
+    that enable computation without explicit training of the network itself.
 """
 
 import numpy as np
@@ -29,421 +30,392 @@ from typing import Optional
 from .loader import SpikeData
 
 
-# Vowel formant frequencies (F1, F2) in Hz
-VOWEL_FORMANTS = {
-    "a": (800, 1200),
-    "i": (300, 2200),
-    "u": (350, 1000),
-    "e": (500, 1800),
-    "o": (500, 900),
+# Vowel class definitions with formant-inspired spectral centroids (Hz)
+_VOWEL_CLASSES = {
+    0: {"label": "/a/", "f1": 730, "f2": 1090, "f3": 2440},
+    1: {"label": "/i/", "f1": 270, "f2": 2290, "f3": 3010},
+    2: {"label": "/u/", "f1": 300, "f2": 870,  "f3": 2240},
+    3: {"label": "/e/", "f1": 530, "f2": 1840, "f3": 2480},
+    4: {"label": "/o/", "f1": 570, "f2": 840,  "f3": 2410},
+    5: {"label": "/ka/", "f1": 680, "f2": 1150, "f3": 2500},
+    6: {"label": "/ki/", "f1": 310, "f2": 2200, "f3": 2960},
+    7: {"label": "/ku/", "f1": 340, "f2": 920,  "f3": 2300},
 }
 
-VOWELS = list(VOWEL_FORMANTS.keys())
+
+def generate_synthetic_vowels(
+    n_samples: int = 240,
+    n_features: int = 12,
+    n_classes: int = 8,
+    noise_std: float = 0.15,
+    seed: Optional[int] = None,
+) -> dict:
+    """Generate synthetic vowel feature vectors mimicking LPC cepstral coefficients.
+
+    Each vowel class has a distinct centroid in feature space derived from
+    formant frequencies. Features simulate 12-dimensional LPC cepstral
+    coefficients with class-specific means and inter-speaker variability.
+
+    Args:
+        n_samples: Total number of samples across all classes.
+        n_features: Dimensionality of feature vectors (LPC order).
+        n_classes: Number of vowel classes (max 8).
+        noise_std: Standard deviation of Gaussian noise for variability.
+        seed: Random seed for reproducibility.
+
+    Returns:
+        Dict with 'features' (n_samples x n_features), 'labels' (n_samples,),
+        'class_names', and generation metadata.
+    """
+    rng = np.random.default_rng(seed)
+    n_classes = min(n_classes, len(_VOWEL_CLASSES))
+    samples_per_class = n_samples // n_classes
+    remainder = n_samples - samples_per_class * n_classes
+
+    features = np.zeros((n_samples, n_features))
+    labels = np.zeros(n_samples, dtype=np.int32)
+    class_names = []
+
+    idx = 0
+    for cls_id in range(n_classes):
+        cls_info = _VOWEL_CLASSES[cls_id]
+        class_names.append(cls_info["label"])
+
+        n_cls = samples_per_class + (1 if cls_id < remainder else 0)
+
+        # Build centroid from formant frequencies normalized to [0, 1]
+        f1_norm = cls_info["f1"] / 1000.0
+        f2_norm = cls_info["f2"] / 3000.0
+        f3_norm = cls_info["f3"] / 4000.0
+
+        centroid = np.zeros(n_features)
+        centroid[0] = f1_norm
+        centroid[1] = f2_norm
+        centroid[2] = f3_norm
+        # Higher cepstral coefficients decay with formant-derived modulation
+        for k in range(3, n_features):
+            centroid[k] = (
+                0.3 * f1_norm * np.cos(np.pi * k * f1_norm)
+                + 0.3 * f2_norm * np.cos(np.pi * k * f2_norm)
+                + 0.2 * f3_norm * np.cos(np.pi * k * f3_norm)
+            ) * np.exp(-0.15 * k)
+
+        # Generate samples with speaker variability
+        for j in range(n_cls):
+            speaker_shift = rng.normal(0, 0.05, n_features)
+            sample = centroid + speaker_shift + rng.normal(0, noise_std, n_features)
+            features[idx] = sample
+            labels[idx] = cls_id
+            idx += 1
+
+    # Shuffle
+    perm = rng.permutation(n_samples)
+    features = features[perm]
+    labels = labels[perm]
+
+    return {
+        "features": features,
+        "labels": labels,
+        "class_names": class_names,
+        "n_samples": n_samples,
+        "n_features": n_features,
+        "n_classes": n_classes,
+        "noise_std": noise_std,
+    }
 
 
-# ── Main Recognition Task ─────────────────────────────────────────────────────
+def build_reservoir(
+    input_dim: int,
+    reservoir_size: int = 256,
+    spectral_radius: float = 0.9,
+    sparsity: float = 0.9,
+    seed: Optional[int] = None,
+) -> dict:
+    """Build a random reservoir (echo state network style).
 
-def run_vowel_recognition(
+    The reservoir simulates the organoid's fixed nonlinear dynamics.
+    A random recurrent weight matrix W with controlled spectral radius
+    provides the echo state property, and a random input weight matrix
+    W_in maps inputs to reservoir space.
+
+    Args:
+        input_dim: Dimensionality of input features.
+        reservoir_size: Number of reservoir neurons (hidden units).
+        spectral_radius: Spectral radius of recurrent matrix (controls
+            memory/stability tradeoff; <1.0 for echo state property).
+        sparsity: Fraction of zero weights in recurrent matrix.
+        seed: Random seed for reproducibility.
+
+    Returns:
+        Dict with weight matrices and reservoir parameters.
+    """
+    rng = np.random.default_rng(seed)
+
+    # Input weight matrix
+    W_in = rng.uniform(-1, 1, (reservoir_size, input_dim))
+
+    # Sparse recurrent weight matrix
+    W = rng.normal(0, 1, (reservoir_size, reservoir_size))
+    mask = rng.random((reservoir_size, reservoir_size)) < sparsity
+    W[mask] = 0.0
+
+    # Scale to desired spectral radius
+    eigenvalues = np.linalg.eigvals(W)
+    max_eigenvalue = np.max(np.abs(eigenvalues))
+    if max_eigenvalue > 0:
+        W = W * (spectral_radius / max_eigenvalue)
+
+    # Bias vector
+    bias = rng.uniform(-0.1, 0.1, reservoir_size)
+
+    return {
+        "W_in": W_in,
+        "W": W,
+        "bias": bias,
+        "reservoir_size": reservoir_size,
+        "spectral_radius": spectral_radius,
+        "sparsity": sparsity,
+        "input_dim": input_dim,
+    }
+
+
+def reservoir_transform(
+    features: np.ndarray,
+    reservoir: dict,
+    leak_rate: float = 0.3,
+) -> np.ndarray:
+    """Transform input features through the reservoir.
+
+    Each input vector is projected into the reservoir's state space.
+    The reservoir state evolves with leaky integration, simulating
+    how neural tissue integrates incoming signals over time.
+
+    Args:
+        features: Input feature matrix (n_samples x input_dim).
+        reservoir: Reservoir dict from build_reservoir().
+        leak_rate: Leaky integrator rate (0=no update, 1=full update).
+
+    Returns:
+        Reservoir states (n_samples x reservoir_size).
+    """
+    W_in = reservoir["W_in"]
+    W = reservoir["W"]
+    bias = reservoir["bias"]
+    reservoir_size = reservoir["reservoir_size"]
+    n_samples = features.shape[0]
+
+    states = np.zeros((n_samples, reservoir_size))
+    state = np.zeros(reservoir_size)
+
+    for t in range(n_samples):
+        pre_activation = W_in @ features[t] + W @ state + bias
+        new_state = np.tanh(pre_activation)
+        state = (1 - leak_rate) * state + leak_rate * new_state
+        states[t] = state
+
+    return states
+
+
+def train_linear_readout(
+    states: np.ndarray,
+    labels: np.ndarray,
+    n_classes: int,
+    alpha: float = 1.0,
+    train_ratio: float = 0.7,
+) -> dict:
+    """Train a linear readout layer via ridge regression.
+
+    This is the only trained component in reservoir computing.
+    The readout maps reservoir states to class predictions.
+    One-vs-all encoding is used for multi-class classification.
+
+    Args:
+        states: Reservoir state matrix (n_samples x reservoir_size).
+        labels: Class labels (n_samples,).
+        n_classes: Number of output classes.
+        alpha: Ridge regularization parameter.
+        train_ratio: Fraction of data for training.
+
+    Returns:
+        Dict with readout weights, train/test accuracy, and per-class metrics.
+    """
+    n_samples = states.shape[0]
+    n_train = int(n_samples * train_ratio)
+
+    X_train = states[:n_train]
+    X_test = states[n_train:]
+    y_train = labels[:n_train]
+    y_test = labels[n_train:]
+
+    # One-hot encode targets
+    Y_train = np.zeros((n_train, n_classes))
+    for i, lbl in enumerate(y_train):
+        Y_train[i, lbl] = 1.0
+
+    # Ridge regression: W_out = (X^T X + alpha I)^{-1} X^T Y
+    XtX = X_train.T @ X_train + alpha * np.eye(X_train.shape[1])
+    XtY = X_train.T @ Y_train
+    W_out = np.linalg.solve(XtX, XtY)
+
+    # Predictions
+    train_pred = np.argmax(X_train @ W_out, axis=1)
+    test_pred = np.argmax(X_test @ W_out, axis=1)
+
+    train_acc = float(np.mean(train_pred == y_train))
+    test_acc = float(np.mean(test_pred == y_test))
+
+    # Per-class metrics
+    per_class = {}
+    for cls in range(n_classes):
+        cls_mask_test = y_test == cls
+        if np.sum(cls_mask_test) > 0:
+            cls_acc = float(np.mean(test_pred[cls_mask_test] == cls))
+        else:
+            cls_acc = 0.0
+        tp = float(np.sum((test_pred == cls) & (y_test == cls)))
+        fp = float(np.sum((test_pred == cls) & (y_test != cls)))
+        fn = float(np.sum((test_pred != cls) & (y_test == cls)))
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+        recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+        f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
+
+        per_class[cls] = {
+            "accuracy": round(cls_acc, 4),
+            "precision": round(precision, 4),
+            "recall": round(recall, 4),
+            "f1": round(f1, 4),
+            "n_test_samples": int(np.sum(cls_mask_test)),
+        }
+
+    return {
+        "W_out": W_out,
+        "train_accuracy": round(train_acc, 4),
+        "test_accuracy": round(test_acc, 4),
+        "per_class": per_class,
+        "n_train": n_train,
+        "n_test": n_samples - n_train,
+        "alpha": alpha,
+    }
+
+
+def run_vowel_classification(
     data: SpikeData,
     n_samples: int = 240,
-    n_training_days: int = 4,
-    readout: str = "logistic",
-    compare_random: bool = True,
-    seed: int = 42,
+    reservoir_size: int = 256,
+    spectral_radius: float = 0.9,
+    seed: Optional[int] = 42,
 ) -> dict:
-    """Run the full Japanese vowel recognition benchmark.
+    """Run full Brainoware-style vowel classification pipeline.
 
-    Simulates the Brainoware experimental setup:
-    - 240 samples, 5 vowels, 48 samples per vowel
-    - 4 training days with progressive improvement tracking
-    - Comparison to random reservoir baseline
+    End-to-end pipeline:
+    1. Generate synthetic vowel data.
+    2. Augment reservoir with organoid spike statistics (firing rates,
+       ISI distributions) to condition the reservoir dynamics on real
+       biological data.
+    3. Build and run reservoir computing.
+    4. Train linear readout and evaluate.
+
+    The organoid's spike data influences reservoir parameters: higher
+    firing rates increase the effective spectral radius, and ISI
+    variability modulates the leak rate, connecting the biological
+    substrate's properties to the computational model.
 
     Args:
-        data: SpikeData (organoid recording)
-        n_samples: total samples (default 240, 48 per vowel)
-        n_training_days: number of simulated training days
-        readout: classifier type ('logistic', 'svm', 'ridge')
-        compare_random: whether to benchmark random reservoir
+        data: SpikeData from the organoid recording.
+        n_samples: Number of synthetic vowel samples.
+        reservoir_size: Number of reservoir units.
+        spectral_radius: Base spectral radius (adjusted by organoid stats).
+        seed: Random seed.
 
     Returns:
-        dict with accuracy, learning progression, confusion matrix, comparison
+        Dict with classification results, reservoir info, and organoid influence.
     """
-    rng = np.random.default_rng(seed)
-    n_per_vowel = n_samples // len(VOWELS)
-    actual_n = n_per_vowel * len(VOWELS)
+    # Generate vowels
+    vowels = generate_synthetic_vowels(n_samples=n_samples, seed=seed)
+    features = vowels["features"]
+    labels = vowels["labels"]
+    n_classes = vowels["n_classes"]
+    class_names = vowels["class_names"]
 
-    # Generate vowel samples and extract reservoir states
-    X, y, sample_meta = _generate_vowel_dataset(data, n_per_vowel, rng)
+    # Extract organoid statistics to condition the reservoir
+    firing_rates = []
+    isis = []
+    for eid in data.electrode_ids:
+        e_times = data.times[data.electrodes == eid]
+        if len(e_times) > 1:
+            rate = len(e_times) / max(data.duration, 1e-6)
+            firing_rates.append(rate)
+            isi = np.diff(e_times)
+            isis.extend(isi.tolist())
 
-    # Train/test split: 80/20
-    n_train = int(actual_n * 0.8)
-    idx = rng.permutation(actual_n)
-    train_idx, test_idx = idx[:n_train], idx[n_train:]
+    mean_firing_rate = float(np.mean(firing_rates)) if firing_rates else 1.0
+    isi_cv = float(np.std(isis) / np.mean(isis)) if isis and np.mean(isis) > 0 else 1.0
 
-    X_train, y_train = X[train_idx], y[train_idx]
-    X_test, y_test = X[test_idx], y[test_idx]
+    # Adjust reservoir parameters based on organoid properties
+    # Higher firing rate -> slightly larger spectral radius (more active dynamics)
+    bio_spectral_radius = min(0.99, spectral_radius * (1 + 0.01 * np.log1p(mean_firing_rate)))
+    # Higher ISI variability -> lower leak rate (more memory retention)
+    bio_leak_rate = max(0.05, min(0.8, 0.3 / (1 + 0.1 * isi_cv)))
+
+    # Build reservoir
+    reservoir = build_reservoir(
+        input_dim=vowels["n_features"],
+        reservoir_size=reservoir_size,
+        spectral_radius=bio_spectral_radius,
+        seed=seed,
+    )
+
+    # Transform through reservoir
+    states = reservoir_transform(features, reservoir, leak_rate=bio_leak_rate)
 
     # Train readout
-    accuracy, predictions, clf_model = _train_readout_multiclass(X_train, y_train, X_test, y_test, readout, rng)
-
-    # Progressive training (simulate days)
-    day_results = _simulate_training_days(data, n_per_vowel, n_training_days, readout, rng)
-
-    # Random reservoir baseline
-    random_baseline = None
-    if compare_random:
-        random_baseline = _random_reservoir_baseline(actual_n, n_per_vowel, readout, rng)
+    readout = train_linear_readout(states, labels, n_classes)
 
     # Confusion matrix
-    confusion = _compute_confusion(predictions, y_test, VOWELS)
+    n_train = readout["n_train"]
+    X_test = states[n_train:]
+    y_test = labels[n_train:]
+    test_pred = np.argmax(X_test @ readout["W_out"], axis=1)
 
-    # Per-vowel accuracy
-    per_vowel = {}
-    for vi, vowel in enumerate(VOWELS):
-        vowel_mask = y_test == vi
-        if np.any(vowel_mask):
-            vowel_preds = predictions[vowel_mask] if predictions is not None else np.array([])
-            per_vowel[vowel] = {
-                "accuracy": round(float(np.mean(vowel_preds == vi)) if len(vowel_preds) > 0 else 0.5, 3),
-                "n_test_samples": int(np.sum(vowel_mask)),
-                "formants": {"F1_hz": VOWEL_FORMANTS[vowel][0], "F2_hz": VOWEL_FORMANTS[vowel][1]},
-            }
+    confusion = np.zeros((n_classes, n_classes), dtype=int)
+    for true_lbl, pred_lbl in zip(y_test, test_pred):
+        confusion[true_lbl, pred_lbl] += 1
 
-    # Compared to chance (20% = 1/5 classes)
-    above_chance = float(accuracy - 1.0 / len(VOWELS))
+    # Brainoware comparison context
+    brainoware_reported_accuracy = 0.78  # From Cai et al. 2023
 
     return {
-        "task": "japanese_vowel_recognition",
-        "n_samples": actual_n,
-        "n_vowels": len(VOWELS),
-        "vowels": VOWELS,
-        "n_training_days": n_training_days,
-        "readout_method": readout,
-        "overall_accuracy": round(float(accuracy), 3),
-        "chance_level": round(1.0 / len(VOWELS), 3),
-        "above_chance": round(above_chance, 3),
-        "passed": accuracy > 0.4,  # above random chance significantly
-        "per_vowel_accuracy": per_vowel,
-        "confusion_matrix": confusion,
-        "training_progression": day_results,
-        "random_baseline": random_baseline,
-        "organoid_advantage": (
-            round(float(accuracy - random_baseline["accuracy"]), 3)
-            if random_baseline else None
-        ),
-        "n_electrodes_used": len(data.electrode_ids),
-        "interpretation": _recognition_interpretation(accuracy, above_chance, day_results, random_baseline),
-    }
-
-
-def analyze_vowel_encoding(
-    data: SpikeData,
-    vowel: str = "a",
-    n_trials: int = 20,
-    seed: int = 0,
-) -> dict:
-    """Analyze how the organoid encodes a specific vowel.
-
-    Returns the reservoir state trajectory and encoding quality.
-
-    Args:
-        data: SpikeData
-        vowel: 'a', 'i', 'u', 'e', or 'o'
-
-    Returns:
-        dict with electrode response patterns, encoding fidelity
-    """
-    if vowel not in VOWEL_FORMANTS:
-        return {"error": f"Unknown vowel '{vowel}'. Choose from {VOWELS}"}
-
-    rng = np.random.default_rng(seed)
-    f1, f2 = VOWEL_FORMANTS[vowel]
-    t_start, t_end = data.time_range
-    duration = t_end - t_start
-    bin_s = 0.1
-    n_electrodes = len(data.electrode_ids)
-
-    stim_pattern = _formants_to_stim(f1, f2, n_electrodes)
-    responses = []
-
-    for _ in range(n_trials):
-        t0 = rng.uniform(t_start, max(t_start + 0.001, t_end - bin_s))
-        mask = (data.times >= t0) & (data.times < t0 + bin_s)
-        ep_el = data.electrodes[mask]
-
-        resp = np.zeros(n_electrodes)
-        for i, eid in enumerate(data.electrode_ids):
-            resp[i] = float(np.sum(ep_el == eid))
-
-        # Modulate by stimulation pattern
-        resp += stim_pattern * rng.uniform(0.5, 2.0)
-        resp += rng.normal(0, 0.1, n_electrodes)
-        responses.append(resp)
-
-    responses_arr = np.array(responses)
-    mean_response = np.mean(responses_arr, axis=0)
-    response_var = np.var(responses_arr, axis=0)
-    signal_to_noise = float(np.mean(mean_response ** 2) / (np.mean(response_var) + 1e-10))
-
-    return {
-        "vowel": vowel,
-        "ipa_symbol": {"a": "æ", "i": "i", "u": "u", "e": "e", "o": "o"}.get(vowel, vowel),
-        "formants": {"F1_hz": f1, "F2_hz": f2},
-        "stimulation_pattern": [round(float(p), 4) for p in stim_pattern],
-        "mean_electrode_response": [round(float(r), 3) for r in mean_response],
-        "response_variability": [round(float(v), 3) for v in response_var],
-        "signal_to_noise_ratio": round(float(signal_to_noise), 3),
-        "active_electrodes": int(np.sum(mean_response > np.mean(mean_response))),
-        "encoding_fidelity": round(float(np.corrcoef(stim_pattern, mean_response)[0, 1]), 3),
+        "test_accuracy": readout["test_accuracy"],
+        "train_accuracy": readout["train_accuracy"],
+        "per_class_metrics": {
+            class_names[k]: v for k, v in readout["per_class"].items()
+        },
+        "confusion_matrix": confusion.tolist(),
+        "class_names": class_names,
+        "n_samples": n_samples,
+        "n_train": readout["n_train"],
+        "n_test": readout["n_test"],
+        "reservoir": {
+            "size": reservoir_size,
+            "spectral_radius_base": spectral_radius,
+            "spectral_radius_bio": round(bio_spectral_radius, 4),
+            "leak_rate": round(bio_leak_rate, 4),
+        },
+        "organoid_influence": {
+            "mean_firing_rate_hz": round(mean_firing_rate, 2),
+            "isi_cv": round(isi_cv, 4),
+            "n_active_electrodes": len(firing_rates),
+        },
+        "brainoware_comparison": {
+            "brainoware_accuracy": brainoware_reported_accuracy,
+            "our_accuracy": readout["test_accuracy"],
+            "delta": round(readout["test_accuracy"] - brainoware_reported_accuracy, 4),
+        },
         "interpretation": (
-            f"Vowel /{vowel}/ (F1={f1}Hz, F2={f2}Hz): "
-            f"SNR={signal_to_noise:.2f}, "
-            f"{int(np.sum(mean_response > np.mean(mean_response)))} active electrodes. "
-            + ("Good encoding fidelity." if signal_to_noise > 2 else "Weak encoding — more trials needed.")
+            f"Reservoir computing vowel classification: {readout['test_accuracy']:.1%} accuracy "
+            f"({n_classes} classes, {n_samples} samples). "
+            f"Organoid-conditioned reservoir (spectral_radius={bio_spectral_radius:.3f}, "
+            f"leak_rate={bio_leak_rate:.3f}). "
+            f"Brainoware reported {brainoware_reported_accuracy:.0%} on similar task."
         ),
     }
-
-
-def compare_vowel_pairs(data: SpikeData, seed: int = 42) -> dict:
-    """Compute pairwise discriminability for all vowel pairs.
-
-    Returns the 5×5 confusion similarity matrix and hardest/easiest pairs.
-    """
-    rng = np.random.default_rng(seed)
-    t_start, t_end = data.time_range
-    duration = t_end - t_start
-    bin_s = 0.1
-    n_electrodes = len(data.electrode_ids)
-    n_per_vowel = 10
-
-    vowel_patterns = {}
-    for vowel in VOWELS:
-        f1, f2 = VOWEL_FORMANTS[vowel]
-        stim = _formants_to_stim(f1, f2, n_electrodes)
-        patterns = []
-        for _ in range(n_per_vowel):
-            t0 = rng.uniform(t_start, max(t_start + 0.001, t_end - bin_s))
-            mask = (data.times >= t0) & (data.times < t0 + bin_s)
-            ep_el = data.electrodes[mask]
-            resp = np.array([float(np.sum(ep_el == eid)) for eid in data.electrode_ids])
-            resp += stim * rng.uniform(0.5, 2.0)
-            resp += rng.normal(0, 0.1, n_electrodes)
-            patterns.append(resp)
-        vowel_patterns[vowel] = np.array(patterns)
-
-    # Pairwise d-prime
-    pairs = []
-    similarity_matrix = {}
-    for i, v1 in enumerate(VOWELS):
-        similarity_matrix[v1] = {}
-        for j, v2 in enumerate(VOWELS):
-            if i == j:
-                similarity_matrix[v1][v2] = 1.0
-                continue
-            p1 = vowel_patterns[v1]
-            p2 = vowel_patterns[v2]
-            mean_diff = float(np.mean(np.linalg.norm(np.mean(p1, axis=0) - np.mean(p2, axis=0))))
-            pooled_std = float(np.mean([np.std(p1), np.std(p2)]) + 1e-10)
-            d_prime = mean_diff / pooled_std
-            similarity = float(np.exp(-d_prime / 3.0))
-            similarity_matrix[v1][v2] = round(similarity, 3)
-            pairs.append({"pair": f"{v1}/{v2}", "d_prime": round(d_prime, 3), "similarity": round(similarity, 3)})
-
-    pairs_sorted = sorted(pairs, key=lambda x: x["d_prime"])
-    hardest = pairs_sorted[:3]
-    easiest = pairs_sorted[-3:]
-
-    return {
-        "similarity_matrix": similarity_matrix,
-        "hardest_pairs": hardest,
-        "easiest_pairs": easiest,
-        "all_pairs": pairs_sorted,
-        "mean_d_prime": round(float(np.mean([p["d_prime"] for p in pairs])), 3),
-        "interpretation": (
-            f"Hardest pair: {pairs_sorted[0]['pair']} (d'={pairs_sorted[0]['d_prime']:.2f}). "
-            f"Easiest pair: {pairs_sorted[-1]['pair']} (d'={pairs_sorted[-1]['d_prime']:.2f}). "
-            f"Mean discriminability d'={np.mean([p['d_prime'] for p in pairs]):.2f}."
-        ),
-    }
-
-
-# ── Internal Helpers ──────────────────────────────────────────────────────────
-
-def _formants_to_stim(f1: float, f2: float, n_electrodes: int) -> np.ndarray:
-    """Convert F1/F2 formant frequencies to electrode stimulation pattern."""
-    pattern = np.zeros(n_electrodes)
-    half = n_electrodes // 2
-
-    # F1 encoded in first half (low-freq → low electrodes)
-    f1_norm = float(np.clip((f1 - 200) / 1000, 0, 1))
-    for i in range(half):
-        pos = i / max(1, half - 1)
-        pattern[i] = float(np.exp(-((f1_norm - pos) ** 2) / 0.05))
-
-    # F2 encoded in second half
-    f2_norm = float(np.clip((f2 - 500) / 2500, 0, 1))
-    for i in range(half, n_electrodes):
-        pos = (i - half) / max(1, n_electrodes - half - 1)
-        pattern[i] = float(np.exp(-((f2_norm - pos) ** 2) / 0.05))
-
-    return pattern
-
-
-def _generate_vowel_dataset(
-    data: SpikeData, n_per_vowel: int, rng: np.random.Generator
-) -> tuple[np.ndarray, np.ndarray, list]:
-    """Generate feature matrix X and label vector y for all vowels."""
-    t_start, t_end = data.time_range
-    duration = t_end - t_start
-    bin_s = min(0.1, duration / (n_per_vowel * len(VOWELS) * 2))
-    n_electrodes = len(data.electrode_ids)
-
-    X_list, y_list, meta = [], [], []
-    for vi, vowel in enumerate(VOWELS):
-        f1, f2 = VOWEL_FORMANTS[vowel]
-        stim = _formants_to_stim(f1, f2, n_electrodes)
-
-        for sample_idx in range(n_per_vowel):
-            t0 = rng.uniform(t_start, max(t_start + 0.001, t_end - bin_s))
-            mask = (data.times >= t0) & (data.times < t0 + bin_s)
-            ep_el = data.electrodes[mask]
-
-            # Reservoir state: organoid response modulated by vowel stimulation
-            resp = np.zeros(n_electrodes)
-            for i, eid in enumerate(data.electrode_ids):
-                resp[i] = float(np.sum(ep_el == eid))
-
-            # Simulate stimulation effect
-            resp += stim * rng.uniform(1.0, 3.0)
-            resp += rng.normal(0, 0.15, n_electrodes)
-
-            X_list.append(resp)
-            y_list.append(vi)
-            meta.append({"vowel": vowel, "sample": sample_idx, "t0": t0})
-
-    return np.array(X_list), np.array(y_list), meta
-
-
-def _train_readout_multiclass(
-    X_train: np.ndarray, y_train: np.ndarray,
-    X_test: np.ndarray, y_test: np.ndarray,
-    readout: str, rng: np.random.Generator,
-) -> tuple[float, Optional[np.ndarray], object]:
-    """Train multiclass readout and evaluate on test set."""
-    from sklearn.preprocessing import StandardScaler
-
-    scaler = StandardScaler()
-    X_tr_s = scaler.fit_transform(X_train)
-    X_te_s = scaler.transform(X_test)
-
-    try:
-        if readout == "logistic":
-            from sklearn.linear_model import LogisticRegression
-            clf = LogisticRegression(max_iter=500, C=1.0, random_state=0, multi_class="auto")
-        elif readout == "svm":
-            from sklearn.svm import SVC
-            clf = SVC(kernel="linear", C=1.0, random_state=0)
-        elif readout == "ridge":
-            from sklearn.linear_model import RidgeClassifier
-            clf = RidgeClassifier(alpha=1.0)
-        else:
-            from sklearn.linear_model import LogisticRegression
-            clf = LogisticRegression(max_iter=300, random_state=0)
-
-        clf.fit(X_tr_s, y_train)
-        predictions = clf.predict(X_te_s)
-        accuracy = float(np.mean(predictions == y_test))
-        return accuracy, predictions, clf
-
-    except Exception:
-        return 1.0 / len(VOWELS), None, None
-
-
-def _simulate_training_days(
-    data: SpikeData, n_per_vowel: int, n_days: int, readout: str, rng: np.random.Generator
-) -> list:
-    """Simulate progressive improvement over N training days."""
-    day_results = []
-    for day in range(1, n_days + 1):
-        # Accuracy improves with training (sigmoid curve)
-        base_acc = 1.0 / len(VOWELS)  # chance
-        max_acc = 0.75
-        progress = (day - 1) / max(1, n_days - 1)
-        acc = base_acc + (max_acc - base_acc) * float(1 / (1 + np.exp(-6 * (progress - 0.4))))
-        acc += rng.normal(0, 0.02)
-        acc = float(np.clip(acc, 0.2, 0.85))
-
-        day_results.append({
-            "day": day,
-            "accuracy": round(acc, 3),
-            "improvement_from_day1": round(acc - (1.0 / len(VOWELS)), 3),
-        })
-
-    return day_results
-
-
-def _random_reservoir_baseline(
-    n_total: int, n_per_vowel: int, readout: str, rng: np.random.Generator
-) -> dict:
-    """Train same readout on random reservoir (no organoid) for comparison."""
-    n_electrodes = 8
-    X = rng.normal(0, 1, (n_total, n_electrodes))
-    y = np.array([vi for vi in range(len(VOWELS)) for _ in range(n_per_vowel)])
-
-    from sklearn.linear_model import LogisticRegression
-    from sklearn.preprocessing import StandardScaler
-    from sklearn.model_selection import cross_val_score
-
-    try:
-        scaler = StandardScaler()
-        X_s = scaler.fit_transform(X)
-        clf = LogisticRegression(max_iter=300, random_state=0)
-        scores = cross_val_score(clf, X_s, y, cv=5)
-        acc = float(np.mean(scores))
-    except Exception:
-        acc = 1.0 / len(VOWELS)
-
-    return {
-        "reservoir_type": "random",
-        "accuracy": round(acc, 3),
-        "n_electrodes": n_electrodes,
-    }
-
-
-def _compute_confusion(
-    predictions: Optional[np.ndarray], y_true: np.ndarray, vowels: list
-) -> dict:
-    """Compute confusion matrix as nested dict."""
-    n = len(vowels)
-    matrix = {v: {v2: 0 for v2 in vowels} for v in vowels}
-
-    if predictions is None:
-        return matrix
-
-    for true_idx, pred_idx in zip(y_true, predictions):
-        if 0 <= true_idx < n and 0 <= pred_idx < n:
-            matrix[vowels[true_idx]][vowels[pred_idx]] += 1
-
-    return matrix
-
-
-def _recognition_interpretation(
-    accuracy: float, above_chance: float, day_results: list, random_baseline: Optional[dict]
-) -> str:
-    chance = 1.0 / len(VOWELS)
-    rb_acc = random_baseline["accuracy"] if random_baseline else chance
-    adv = accuracy - rb_acc
-
-    final_day_acc = day_results[-1]["accuracy"] if day_results else accuracy
-    learning = day_results[-1]["improvement_from_day1"] if day_results else 0
-
-    return (
-        f"Vowel recognition: {accuracy:.1%} accuracy ({above_chance:+.1%} vs chance). "
-        f"Organoid vs random reservoir: {adv:+.1%} advantage. "
-        f"After {len(day_results)} training days: {final_day_acc:.1%} (+{learning:.1%} improvement). "
-        + ("Replicates Brainoware result — organoid outperforms random reservoir!"
-           if adv > 0.1 and final_day_acc > 0.5
-           else "Moderate speech recognition capability."
-           if accuracy > 0.3
-           else "Below expected — consider more electrodes or longer recording.")
-    )

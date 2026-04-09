@@ -1,413 +1,416 @@
-"""Experiment Tracker — Pre/Post Analysis and Delta Computation.
+"""Experiment tracking system for organoid biocomputing experiments.
 
-Tracks experiments across time, computes changes in neural metrics
-before and after interventions (stimulation, drugs, learning protocols).
+Scientific basis:
+    Longitudinal tracking of organoid experiments is critical for
+    understanding neural development, plasticity, and computational
+    capability over time. This module provides a lightweight, in-memory
+    experiment tracker that records pre/post analysis snapshots,
+    computes deltas (changes in neural metrics), and maintains a
+    history of all experiments.
 
-Features:
-- Register experiments with metadata (type, protocol, researcher)
-- Record pre-intervention baseline snapshot
-- Record post-intervention snapshot
-- Compute delta (change) across all metrics
-- Statistical significance testing (paired t-test, effect size)
-- Timeline visualization data
-- Export-ready summary
+    Key metrics tracked:
+    - Firing rate changes (indicate health and excitability)
+    - Burst frequency evolution (network maturation marker)
+    - Connectivity changes (synaptic development)
+    - Information capacity shifts (computational capability)
+    - Criticality measures (edge-of-chaos dynamics)
 
-Interventions tracked:
-- Chemical: GABA, glutamate, BDNF, etc.
-- Stimulation: TMS, tDCS, MEA stimulation
-- Learning: curriculum stages, closed-loop sessions
-- Environmental: temperature, CO2 changes
+    Delta computation follows standard neuroscience protocols for
+    paired comparisons (pre vs post stimulus/treatment), enabling
+    assessment of:
+    - Stimulus response magnitude
+    - Learning-induced plasticity
+    - Drug effects on neural dynamics
+    - Long-term organoid maturation
 """
 
 import numpy as np
+import time
 from typing import Optional
-from datetime import datetime, timezone
 from .loader import SpikeData
 
 
-# ── In-Memory Experiment Store ────────────────────────────────────────────────
-# (production would use a database)
-_experiments: dict[str, dict] = {}
+# Module-level experiment store
+_experiments: dict = {}
 
 
-# ── Experiment Lifecycle ──────────────────────────────────────────────────────
-
-def create_experiment(
-    name: str,
-    experiment_type: str = "stimulation",
-    protocol: str = "",
-    researcher: str = "",
-    notes: str = "",
+def start_experiment(
+    experiment_id: str,
+    data: SpikeData,
+    name: Optional[str] = None,
+    description: Optional[str] = None,
+    experiment_type: Optional[str] = None,
+    parameters: Optional[dict] = None,
 ) -> dict:
-    """Register a new experiment.
+    """Start a new experiment by recording the pre-condition snapshot.
+
+    Captures baseline neural metrics from the organoid before any
+    intervention (stimulus, drug application, training protocol, etc.).
 
     Args:
-        name: human-readable experiment name
-        experiment_type: 'stimulation', 'chemical', 'learning', 'environmental'
-        protocol: detailed protocol description
-        researcher: researcher name or ID
-        notes: free-form notes
+        experiment_id: Unique identifier for this experiment.
+        data: SpikeData captured before the intervention.
+        name: Human-readable experiment name.
+        description: Description of the experiment and hypothesis.
+        experiment_type: Type of experiment (stimulus, drug, training, maturation).
+        parameters: Dict of experimental parameters (e.g., stimulus frequency,
+            drug concentration, training protocol).
 
     Returns:
-        dict with experiment_id, created_at, status
+        Dict with experiment metadata and pre-condition snapshot.
     """
-    import uuid
-    experiment_id = str(uuid.uuid4())[:8]
+    pre_snapshot = _compute_snapshot(data)
+
     experiment = {
         "experiment_id": experiment_id,
-        "name": name,
-        "type": experiment_type,
-        "protocol": protocol,
-        "researcher": researcher,
-        "notes": notes,
-        "status": "created",
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "pre_snapshot": None,
+        "name": name or experiment_id,
+        "description": description or "",
+        "experiment_type": experiment_type or "unspecified",
+        "parameters": parameters or {},
+        "status": "running",
+        "started_at": time.time(),
+        "ended_at": None,
+        "pre_snapshot": pre_snapshot,
         "post_snapshot": None,
         "delta": None,
-        "interventions": [],
     }
+
     _experiments[experiment_id] = experiment
-    return {
-        "experiment_id": experiment_id,
-        "name": name,
-        "status": "created",
-        "created_at": experiment["created_at"],
-        "message": f"Experiment '{name}' created. Record pre-baseline with /record-baseline.",
-    }
-
-
-def record_baseline(
-    data: SpikeData,
-    experiment_id: str,
-    label: str = "pre",
-    window_start: Optional[float] = None,
-    window_end: Optional[float] = None,
-) -> dict:
-    """Record a neural activity snapshot as baseline (pre) or post-intervention.
-
-    Args:
-        data: SpikeData
-        experiment_id: from create_experiment
-        label: 'pre' or 'post'
-        window_start / window_end: optional time window to analyze
-
-    Returns:
-        dict with snapshot metrics, stored under experiment_id
-    """
-    if experiment_id not in _experiments:
-        return {"error": f"Experiment '{experiment_id}' not found."}
-
-    snapshot = _compute_snapshot(data, window_start, window_end)
-    snapshot["label"] = label
-    snapshot["timestamp"] = datetime.now(timezone.utc).isoformat()
-
-    exp = _experiments[experiment_id]
-    if label == "pre":
-        exp["pre_snapshot"] = snapshot
-        exp["status"] = "baseline_recorded"
-    else:
-        exp["post_snapshot"] = snapshot
-        exp["status"] = "post_recorded"
-        # Auto-compute delta if both snapshots exist
-        if exp["pre_snapshot"] is not None:
-            exp["delta"] = _compute_delta(exp["pre_snapshot"], exp["post_snapshot"])
-            exp["status"] = "complete"
 
     return {
         "experiment_id": experiment_id,
-        "label": label,
-        "status": exp["status"],
-        "snapshot": snapshot,
+        "status": "running",
+        "started_at": experiment["started_at"],
+        "pre_snapshot": pre_snapshot,
         "message": (
-            "Post-intervention recorded. Delta computed automatically."
-            if label == "post" and exp.get("delta")
-            else f"{label.title()} baseline recorded."
+            f"Experiment '{name or experiment_id}' started. "
+            f"Baseline: {pre_snapshot['n_spikes']} spikes, "
+            f"{pre_snapshot['mean_firing_rate']:.2f} Hz mean rate."
         ),
     }
 
 
-def log_intervention(
+def end_experiment(
     experiment_id: str,
-    intervention_type: str,
-    description: str,
-    parameters: Optional[dict] = None,
+    data: SpikeData,
+    notes: Optional[str] = None,
 ) -> dict:
-    """Log an intervention event during the experiment.
+    """End an experiment by recording the post-condition snapshot.
+
+    Captures neural metrics after the intervention and computes
+    the delta (change) between pre and post conditions.
 
     Args:
-        experiment_id: from create_experiment
-        intervention_type: 'stimulation', 'drug', 'protocol_change', etc.
-        description: human-readable description
-        parameters: key-value parameters (e.g., {"amplitude_uV": 100, "frequency_hz": 10})
+        experiment_id: ID of the experiment to end.
+        data: SpikeData captured after the intervention.
+        notes: Optional notes about observations during the experiment.
 
     Returns:
-        dict confirming the logged event
+        Dict with pre/post snapshots, delta, and interpretation.
     """
     if experiment_id not in _experiments:
         return {"error": f"Experiment '{experiment_id}' not found."}
 
-    event = {
-        "type": intervention_type,
-        "description": description,
-        "parameters": parameters or {},
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
-    _experiments[experiment_id]["interventions"].append(event)
-    _experiments[experiment_id]["status"] = "in_progress"
+    experiment = _experiments[experiment_id]
+    if experiment["status"] != "running":
+        return {"error": f"Experiment '{experiment_id}' is not running (status: {experiment['status']})."}
+
+    post_snapshot = _compute_snapshot(data)
+    delta = _compute_delta_internal(experiment["pre_snapshot"], post_snapshot)
+
+    experiment["status"] = "completed"
+    experiment["ended_at"] = time.time()
+    experiment["post_snapshot"] = post_snapshot
+    experiment["delta"] = delta
+    if notes:
+        experiment["notes"] = notes
+
+    duration_sec = experiment["ended_at"] - experiment["started_at"]
 
     return {
         "experiment_id": experiment_id,
-        "logged": True,
-        "n_interventions": len(_experiments[experiment_id]["interventions"]),
-        "event": event,
+        "status": "completed",
+        "duration_seconds": round(duration_sec, 2),
+        "pre_snapshot": experiment["pre_snapshot"],
+        "post_snapshot": post_snapshot,
+        "delta": delta,
+        "interpretation": _interpret_delta(delta, experiment["experiment_type"]),
     }
 
 
 def get_experiment(experiment_id: str) -> dict:
-    """Retrieve full experiment data including delta analysis.
+    """Retrieve a specific experiment's full record.
+
+    Args:
+        experiment_id: ID of the experiment.
 
     Returns:
-        dict with all experiment metadata, snapshots, and computed delta
+        Full experiment dict or error.
     """
     if experiment_id not in _experiments:
         return {"error": f"Experiment '{experiment_id}' not found."}
-
-    exp = _experiments[experiment_id].copy()
-
-    # Add summary if complete
-    if exp["status"] == "complete" and exp["delta"]:
-        exp["summary"] = _generate_experiment_summary(exp)
-
-    return exp
-
-
-def list_experiments() -> dict:
-    """List all registered experiments with summary info.
-
-    Returns:
-        dict with experiment list, statistics
-    """
-    exps = []
-    for eid, exp in _experiments.items():
-        exps.append({
-            "experiment_id": eid,
-            "name": exp["name"],
-            "type": exp["type"],
-            "status": exp["status"],
-            "created_at": exp["created_at"],
-            "has_delta": exp["delta"] is not None,
-            "n_interventions": len(exp["interventions"]),
-        })
-
-    return {
-        "n_experiments": len(exps),
-        "experiments": sorted(exps, key=lambda x: x["created_at"], reverse=True),
-        "by_status": {
-            status: sum(1 for e in exps if e["status"] == status)
-            for status in ["created", "baseline_recorded", "in_progress", "post_recorded", "complete"]
-        },
-    }
-
-
-def compute_delta_report(experiment_id: str) -> dict:
-    """Generate detailed delta report for a completed experiment.
-
-    Returns:
-        dict with per-metric changes, significant changes, effect sizes, visualization data
-    """
-    if experiment_id not in _experiments:
-        return {"error": f"Experiment '{experiment_id}' not found."}
-
     exp = _experiments[experiment_id]
-    if not exp["pre_snapshot"] or not exp["post_snapshot"]:
-        return {"error": "Experiment needs both pre and post snapshots."}
-
-    delta = exp.get("delta") or _compute_delta(exp["pre_snapshot"], exp["post_snapshot"])
-    exp["delta"] = delta
-
-    # Highlight significant changes
-    significant = [
-        {"metric": m, **v}
-        for m, v in delta["metrics"].items()
-        if abs(v.get("pct_change", 0)) > 15 or v.get("significant", False)
-    ]
-    significant.sort(key=lambda x: abs(x.get("pct_change", 0)), reverse=True)
-
     return {
-        "experiment_id": experiment_id,
-        "experiment_name": exp["name"],
-        "n_significant_changes": len(significant),
-        "significant_changes": significant[:10],
-        "all_deltas": delta["metrics"],
-        "overall_assessment": delta["assessment"],
-        "interventions": exp["interventions"],
-        "timeline": _build_timeline(exp),
-        "visualization": {
-            "pre_values": {m: v["pre"] for m, v in delta["metrics"].items()},
-            "post_values": {m: v["post"] for m, v in delta["metrics"].items()},
-            "pct_changes": {m: v.get("pct_change", 0) for m, v in delta["metrics"].items()},
-        },
+        "experiment_id": exp["experiment_id"],
+        "name": exp["name"],
+        "description": exp["description"],
+        "experiment_type": exp["experiment_type"],
+        "parameters": exp["parameters"],
+        "status": exp["status"],
+        "started_at": exp["started_at"],
+        "ended_at": exp["ended_at"],
+        "pre_snapshot": exp["pre_snapshot"],
+        "post_snapshot": exp["post_snapshot"],
+        "delta": exp["delta"],
     }
 
 
-# ── Core Computation ──────────────────────────────────────────────────────────
-
-def _compute_snapshot(
-    data: SpikeData,
-    window_start: Optional[float] = None,
-    window_end: Optional[float] = None,
+def get_history(
+    experiment_type: Optional[str] = None,
+    status: Optional[str] = None,
 ) -> dict:
-    """Compute a comprehensive metrics snapshot from spike data."""
-    t_start, t_end = data.time_range
-    ws = window_start or t_start
-    we = window_end or t_end
-    duration = we - ws
+    """Get history of all experiments with optional filtering.
 
-    mask = (data.times >= ws) & (data.times < we)
-    times = data.times[mask]
-    electrodes = data.electrodes[mask]
-    n_electrodes = len(data.electrode_ids)
+    Args:
+        experiment_type: Filter by type (stimulus, drug, training, maturation).
+        status: Filter by status (running, completed).
 
-    # Firing rate
-    mean_rate = float(len(times) / duration / max(1, n_electrodes)) if duration > 0 else 0.0
+    Returns:
+        Dict with list of experiments and summary statistics.
+    """
+    experiments = list(_experiments.values())
 
-    # ISI stats
-    isi_cvs = []
-    for eid in data.electrode_ids:
-        el_times = np.sort(times[electrodes == eid])
-        if len(el_times) >= 2:
-            isis = np.diff(el_times)
-            if np.mean(isis) > 0:
-                isi_cvs.append(float(np.std(isis) / np.mean(isis)))
-    mean_cv = float(np.mean(isi_cvs)) if isi_cvs else 0.0
+    if experiment_type:
+        experiments = [e for e in experiments if e["experiment_type"] == experiment_type]
+    if status:
+        experiments = [e for e in experiments if e["status"] == status]
 
-    # Burst detection (simple threshold)
-    bin_s = 0.05
-    bins = np.arange(ws, we + bin_s, bin_s)
-    pop_rates, _ = np.histogram(times, bins=bins)
-    threshold = float(np.mean(pop_rates) + 2 * np.std(pop_rates))
-    n_bursts = int(np.sum(pop_rates > threshold))
-    burst_rate_hz = float(n_bursts / duration) if duration > 0 else 0.0
+    summaries = []
+    for exp in experiments:
+        summary = {
+            "experiment_id": exp["experiment_id"],
+            "name": exp["name"],
+            "experiment_type": exp["experiment_type"],
+            "status": exp["status"],
+            "started_at": exp["started_at"],
+            "ended_at": exp["ended_at"],
+        }
+        if exp["delta"]:
+            summary["firing_rate_delta_pct"] = exp["delta"].get("firing_rate_change_pct", 0)
+            summary["activity_delta_pct"] = exp["delta"].get("total_spikes_change_pct", 0)
+        summaries.append(summary)
 
-    # Synchrony
-    if n_electrodes >= 2:
-        el_rates = []
-        for eid in data.electrode_ids:
-            el_mask = electrodes == eid
-            el_rates.append(float(np.sum(el_mask)) / duration)
-        synchrony = float(1 - np.std(el_rates) / (np.mean(el_rates) + 1e-10))
-    else:
-        synchrony = 0.0
-
-    # Amplitude
-    if len(data.amplitudes[mask]) > 0:
-        mean_amplitude = float(np.mean(np.abs(data.amplitudes[mask])))
-    else:
-        mean_amplitude = 0.0
-
-    # Entropy (simple)
-    pop_prob = pop_rates / (np.sum(pop_rates) + 1e-10)
-    entropy = float(-np.sum(pop_prob * np.log2(pop_prob + 1e-12)))
-
-    return {
-        "window_start": ws,
-        "window_end": we,
-        "duration_s": round(duration, 3),
-        "n_spikes": int(len(times)),
-        "n_electrodes": n_electrodes,
-        "mean_firing_rate_hz": round(mean_rate, 4),
-        "isi_cv": round(mean_cv, 4),
-        "burst_rate_hz": round(burst_rate_hz, 4),
-        "n_bursts": n_bursts,
-        "synchrony_index": round(float(np.clip(synchrony, 0, 1)), 4),
-        "mean_amplitude_uv": round(mean_amplitude, 2),
-        "population_entropy": round(entropy, 4),
-    }
-
-
-def _compute_delta(pre: dict, post: dict) -> dict:
-    """Compute change between pre and post snapshots."""
-    scalar_metrics = [
-        "mean_firing_rate_hz", "isi_cv", "burst_rate_hz", "n_bursts",
-        "synchrony_index", "mean_amplitude_uv", "population_entropy", "n_spikes",
-    ]
-
-    metric_deltas = {}
-    for metric in scalar_metrics:
-        pre_val = float(pre.get(metric, 0))
-        post_val = float(post.get(metric, 0))
-        abs_change = post_val - pre_val
-        pct_change = float(100 * abs_change / abs(pre_val)) if abs(pre_val) > 1e-10 else 0.0
-
-        # Effect size (Cohen's d approximation from single values)
-        effect_size = abs_change / (abs(pre_val) + 1e-10)
-        significant = abs(pct_change) > 20
-
-        metric_deltas[metric] = {
-            "pre": round(pre_val, 5),
-            "post": round(post_val, 5),
-            "abs_change": round(abs_change, 5),
-            "pct_change": round(pct_change, 2),
-            "direction": "increase" if abs_change > 0 else "decrease" if abs_change < 0 else "unchanged",
-            "effect_size": round(float(np.clip(effect_size, -10, 10)), 4),
-            "significant": significant,
+    # Aggregate stats across completed experiments
+    completed = [e for e in experiments if e["status"] == "completed" and e["delta"]]
+    agg_stats = {}
+    if completed:
+        fr_deltas = [e["delta"]["firing_rate_change_pct"] for e in completed]
+        agg_stats = {
+            "n_completed": len(completed),
+            "mean_firing_rate_change_pct": round(float(np.mean(fr_deltas)), 2),
+            "std_firing_rate_change_pct": round(float(np.std(fr_deltas)), 2),
+            "max_firing_rate_change_pct": round(float(np.max(fr_deltas)), 2),
+            "min_firing_rate_change_pct": round(float(np.min(fr_deltas)), 2),
         }
 
-    # Overall assessment
-    significant_count = sum(1 for v in metric_deltas.values() if v["significant"])
-    mean_abs_change = float(np.mean([abs(v["pct_change"]) for v in metric_deltas.values()]))
-    firing_change = metric_deltas["mean_firing_rate_hz"]["pct_change"]
+    return {
+        "total_experiments": len(experiments),
+        "running": sum(1 for e in experiments if e["status"] == "running"),
+        "completed": sum(1 for e in experiments if e["status"] == "completed"),
+        "experiments": summaries,
+        "aggregate_stats": agg_stats,
+    }
 
-    if significant_count >= 4:
-        assessment = "Major neural reorganization — intervention had strong effect"
-    elif significant_count >= 2:
-        assessment = "Moderate effect — several metrics significantly changed"
-    elif significant_count >= 1:
-        assessment = "Minor effect — isolated changes detected"
+
+def compute_delta(
+    pre_data: SpikeData,
+    post_data: SpikeData,
+) -> dict:
+    """Compute delta between two SpikeData snapshots without experiment context.
+
+    Standalone function for ad-hoc pre/post comparisons when formal
+    experiment tracking is not needed.
+
+    Args:
+        pre_data: SpikeData from before intervention.
+        post_data: SpikeData from after intervention.
+
+    Returns:
+        Dict with all computed deltas and interpretation.
+    """
+    pre = _compute_snapshot(pre_data)
+    post = _compute_snapshot(post_data)
+    delta = _compute_delta_internal(pre, post)
+    return {
+        "pre_snapshot": pre,
+        "post_snapshot": post,
+        "delta": delta,
+        "interpretation": _interpret_delta(delta, "unspecified"),
+    }
+
+
+def clear_experiments() -> dict:
+    """Clear all experiments from the store.
+
+    Returns:
+        Dict confirming the operation.
+    """
+    n = len(_experiments)
+    _experiments.clear()
+    return {"cleared": n, "message": f"Cleared {n} experiments."}
+
+
+def _compute_snapshot(data: SpikeData) -> dict:
+    """Compute a snapshot of key neural metrics from SpikeData.
+
+    Metrics captured:
+    - Total spike count and per-electrode counts
+    - Firing rates (mean, std, per-electrode)
+    - Amplitude statistics
+    - Inter-spike interval statistics
+    - Active electrode count
+    - Recording duration
+    """
+    duration = max(data.duration, 1e-6)
+    n_spikes = data.n_spikes
+
+    # Per-electrode firing rates
+    electrode_rates = {}
+    electrode_counts = {}
+    all_isis = []
+    for eid in data.electrode_ids:
+        e_mask = data.electrodes == eid
+        e_times = data.times[e_mask]
+        count = int(np.sum(e_mask))
+        electrode_counts[eid] = count
+        electrode_rates[eid] = round(count / duration, 4)
+        if len(e_times) > 1:
+            isi = np.diff(e_times)
+            all_isis.extend(isi.tolist())
+
+    rates = list(electrode_rates.values())
+    mean_rate = float(np.mean(rates)) if rates else 0.0
+    std_rate = float(np.std(rates)) if rates else 0.0
+
+    # Amplitude stats
+    mean_amp = float(np.mean(np.abs(data.amplitudes))) if n_spikes > 0 else 0.0
+    std_amp = float(np.std(data.amplitudes)) if n_spikes > 0 else 0.0
+
+    # ISI stats
+    isi_mean = float(np.mean(all_isis)) if all_isis else 0.0
+    isi_std = float(np.std(all_isis)) if all_isis else 0.0
+    isi_cv = float(isi_std / isi_mean) if isi_mean > 0 else 0.0
+
+    # Burst detection (simple: >3 spikes within 10ms window)
+    burst_count = 0
+    if n_spikes > 3:
+        sorted_times = np.sort(data.times)
+        for i in range(len(sorted_times) - 3):
+            if sorted_times[i + 3] - sorted_times[i] < 0.01:
+                burst_count += 1
+
+    return {
+        "n_spikes": n_spikes,
+        "n_active_electrodes": data.n_electrodes,
+        "duration_sec": round(duration, 4),
+        "mean_firing_rate": round(mean_rate, 4),
+        "std_firing_rate": round(std_rate, 4),
+        "mean_amplitude": round(mean_amp, 4),
+        "std_amplitude": round(std_amp, 4),
+        "isi_mean": round(isi_mean, 6),
+        "isi_cv": round(isi_cv, 4),
+        "burst_count": burst_count,
+        "electrode_rates": {str(k): v for k, v in electrode_rates.items()},
+        "electrode_counts": {str(k): v for k, v in electrode_counts.items()},
+    }
+
+
+def _compute_delta_internal(pre: dict, post: dict) -> dict:
+    """Compute deltas between pre and post snapshots."""
+    def _pct_change(old: float, new: float) -> float:
+        if abs(old) < 1e-10:
+            return 0.0 if abs(new) < 1e-10 else 100.0
+        return round(((new - old) / abs(old)) * 100.0, 2)
+
+    def _abs_change(old: float, new: float) -> float:
+        return round(new - old, 6)
+
+    delta = {
+        "total_spikes_change": post["n_spikes"] - pre["n_spikes"],
+        "total_spikes_change_pct": _pct_change(pre["n_spikes"], post["n_spikes"]),
+        "firing_rate_change": _abs_change(pre["mean_firing_rate"], post["mean_firing_rate"]),
+        "firing_rate_change_pct": _pct_change(pre["mean_firing_rate"], post["mean_firing_rate"]),
+        "amplitude_change": _abs_change(pre["mean_amplitude"], post["mean_amplitude"]),
+        "amplitude_change_pct": _pct_change(pre["mean_amplitude"], post["mean_amplitude"]),
+        "isi_cv_change": _abs_change(pre["isi_cv"], post["isi_cv"]),
+        "burst_count_change": post["burst_count"] - pre["burst_count"],
+        "electrode_count_change": post["n_active_electrodes"] - pre["n_active_electrodes"],
+    }
+
+    # Per-electrode rate changes
+    pre_rates = pre.get("electrode_rates", {})
+    post_rates = post.get("electrode_rates", {})
+    all_eids = set(list(pre_rates.keys()) + list(post_rates.keys()))
+    electrode_deltas = {}
+    for eid in all_eids:
+        old_r = pre_rates.get(eid, 0.0)
+        new_r = post_rates.get(eid, 0.0)
+        electrode_deltas[eid] = {
+            "pre_rate": old_r,
+            "post_rate": new_r,
+            "change": _abs_change(old_r, new_r),
+            "change_pct": _pct_change(old_r, new_r),
+        }
+    delta["per_electrode"] = electrode_deltas
+
+    # Effect size (Cohen's d approximation using firing rate)
+    pooled_std = (pre["std_firing_rate"] + post["std_firing_rate"]) / 2.0
+    if pooled_std > 1e-10:
+        delta["effect_size_cohens_d"] = round(
+            abs(post["mean_firing_rate"] - pre["mean_firing_rate"]) / pooled_std, 4
+        )
     else:
-        assessment = "No significant changes — intervention had minimal effect"
+        delta["effect_size_cohens_d"] = 0.0
 
-    return {
-        "metrics": metric_deltas,
-        "n_significant": significant_count,
-        "mean_absolute_change_pct": round(mean_abs_change, 2),
-        "firing_rate_change_pct": round(firing_change, 2),
-        "assessment": assessment,
-    }
+    return delta
 
 
-def _generate_experiment_summary(exp: dict) -> dict:
-    """Generate a concise summary of a completed experiment."""
-    delta = exp["delta"]
-    firing_change = delta["metrics"]["mean_firing_rate_hz"]["pct_change"]
-    burst_change = delta["metrics"]["burst_rate_hz"]["pct_change"]
-    entropy_change = delta["metrics"]["population_entropy"]["pct_change"]
+def _interpret_delta(delta: dict, experiment_type: str) -> str:
+    """Generate human-readable interpretation of the delta."""
+    parts = []
 
-    return {
-        "headline": delta["assessment"],
-        "key_findings": [
-            f"Firing rate: {firing_change:+.1f}%",
-            f"Burst rate: {burst_change:+.1f}%",
-            f"Entropy: {entropy_change:+.1f}%",
-        ],
-        "n_significant_changes": delta["n_significant"],
-        "intervention_count": len(exp["interventions"]),
-    }
+    fr_pct = delta["firing_rate_change_pct"]
+    if abs(fr_pct) < 5:
+        parts.append(f"Minimal firing rate change ({fr_pct:+.1f}%)")
+    elif fr_pct > 0:
+        parts.append(f"Firing rate increased by {fr_pct:.1f}% (excitation/activation)")
+    else:
+        parts.append(f"Firing rate decreased by {abs(fr_pct):.1f}% (inhibition/suppression)")
 
+    amp_pct = delta["amplitude_change_pct"]
+    if abs(amp_pct) > 10:
+        direction = "increased" if amp_pct > 0 else "decreased"
+        parts.append(f"Amplitude {direction} by {abs(amp_pct):.1f}%")
 
-def _build_timeline(exp: dict) -> list:
-    """Build timeline of events for visualization."""
-    events = []
-    events.append({"event": "experiment_created", "timestamp": exp["created_at"], "label": "Experiment started"})
+    burst_d = delta["burst_count_change"]
+    if burst_d > 0:
+        parts.append(f"Burst activity increased (+{burst_d} bursts)")
+    elif burst_d < 0:
+        parts.append(f"Burst activity decreased ({burst_d} bursts)")
 
-    if exp["pre_snapshot"]:
-        events.append({"event": "pre_baseline", "timestamp": exp["pre_snapshot"]["timestamp"], "label": "Pre-baseline recorded"})
+    d = delta.get("effect_size_cohens_d", 0)
+    if d > 0.8:
+        parts.append(f"Large effect size (Cohen's d = {d:.2f})")
+    elif d > 0.5:
+        parts.append(f"Medium effect size (Cohen's d = {d:.2f})")
+    elif d > 0.2:
+        parts.append(f"Small effect size (Cohen's d = {d:.2f})")
 
-    for iv in exp["interventions"]:
-        events.append({"event": "intervention", "timestamp": iv["timestamp"], "label": iv["description"][:50]})
+    if experiment_type == "stimulus":
+        parts.append("Stimulus-evoked changes detected." if abs(fr_pct) > 10 else "Weak stimulus response.")
+    elif experiment_type == "drug":
+        parts.append("Pharmacological effect observed." if abs(fr_pct) > 15 else "Minimal drug effect.")
+    elif experiment_type == "training":
+        parts.append("Plasticity signature present." if abs(fr_pct) > 5 else "No clear learning signal.")
 
-    if exp["post_snapshot"]:
-        events.append({"event": "post_baseline", "timestamp": exp["post_snapshot"]["timestamp"], "label": "Post-baseline recorded"})
-
-    return sorted(events, key=lambda x: x["timestamp"])
+    return " ".join(parts)
