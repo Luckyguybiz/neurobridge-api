@@ -68,6 +68,10 @@ from analysis.grant_matcher import match_grants, get_grant_details, list_grants
 from analysis.turing_test import run_turing_test
 from analysis.neural_architecture_search import search_optimal_protocol
 from analysis.hybrid_ai import benchmark_hybrid
+from analysis.genetic_programming import evolve_programs
+from analysis.homeostatic_plasticity import monitor_homeostasis
+from analysis.suffering_detector import detect_suffering
+from analysis.welfare_report import generate_welfare_report
 from analysis.catastrophic_forgetting import measure_forgetting, compute_retention_curve
 from analysis.transfer_learning import measure_transfer, compute_representational_similarity
 from analysis.functional_connectome import build_full_connectome, detect_communities, compute_graph_theory_metrics
@@ -1337,6 +1341,48 @@ async def api_causal_hierarchy(dataset_id: str):
     data = _get_dataset(dataset_id)
     t0 = time.time()
     result = compute_causal_hierarchy(data)
+    result["_computation_time_ms"] = (time.time() - t0) * 1000
+    return _sanitize(result)
+
+
+# ═══════════ BIO-INSPIRED & ETHICS ═══════════
+
+@app.post("/api/analysis/{dataset_id}/evolve-programs")
+async def api_evolve_programs(dataset_id: str, generations: int = 50):
+    """Genetic programming — evolve stimulation program trees."""
+    data = _get_dataset(dataset_id)
+    t0 = time.time()
+    result = evolve_programs(data, generations=generations)
+    result["_computation_time_ms"] = (time.time() - t0) * 1000
+    return _sanitize(result)
+
+
+@app.get("/api/analysis/{dataset_id}/homeostasis")
+async def api_homeostasis(dataset_id: str):
+    """Monitor homeostatic plasticity — firing rate self-regulation."""
+    data = _get_dataset(dataset_id)
+    t0 = time.time()
+    result = monitor_homeostasis(data)
+    result["_computation_time_ms"] = (time.time() - t0) * 1000
+    return _sanitize(result)
+
+
+@app.get("/api/analysis/{dataset_id}/suffering")
+async def api_suffering(dataset_id: str):
+    """Detect distress/suffering patterns — ethical monitoring."""
+    data = _get_dataset(dataset_id)
+    t0 = time.time()
+    result = detect_suffering(data)
+    result["_computation_time_ms"] = (time.time() - t0) * 1000
+    return _sanitize(result)
+
+
+@app.get("/api/analysis/{dataset_id}/welfare")
+async def api_welfare(dataset_id: str):
+    """Generate comprehensive welfare report."""
+    data = _get_dataset(dataset_id)
+    t0 = time.time()
+    result = generate_welfare_report(data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
     return _sanitize(result)
 

@@ -272,7 +272,7 @@ def measure_population_code_diversity(
             "capacity_bits": 0.0,
         }
 
-    vectors, bin_centers = _bin_population_vectors(data, bin_size_ms=bin_size_ms)
+    vectors, bin_centers = _bin_population_vectors(data, bin_ms=bin_size_ms)
     n_bins, n_electrodes = vectors.shape
 
     if n_bins < 5 or n_electrodes < 2:

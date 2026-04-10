@@ -31,6 +31,7 @@ References:
 
 import numpy as np
 from scipy.signal import hilbert
+from scipy.stats import pearsonr
 from typing import Optional
 from .loader import SpikeData
 
