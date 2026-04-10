@@ -72,6 +72,7 @@ from analysis.catastrophic_forgetting import measure_forgetting, compute_retenti
 from analysis.transfer_learning import measure_transfer, compute_representational_similarity
 from analysis.functional_connectome import build_full_connectome, detect_communities, compute_graph_theory_metrics
 from analysis.effective_connectivity import estimate_effective_connectivity, compute_causal_hierarchy
+from analysis.consolidation import detect_consolidation_events, measure_retention
 from models.schemas import (
     SpikeDetectionParams, BurstDetectionParams, SpikeSortingParams,
     ConnectivityParams, TimeRangeFilter, DatasetInfo,
@@ -1212,6 +1213,16 @@ async def api_forgetting(dataset_id: str):
     data = _get_dataset(dataset_id)
     t0 = time.time()
     result = compute_retention_curve(data)
+    result["_computation_time_ms"] = (time.time() - t0) * 1000
+    return _sanitize(result)
+
+
+@app.get("/api/analysis/{dataset_id}/consolidation")
+async def api_consolidation(dataset_id: str):
+    """Detect memory consolidation events during offline periods."""
+    data = _get_dataset(dataset_id)
+    t0 = time.time()
+    result = detect_consolidation_events(data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
     return _sanitize(result)
 
