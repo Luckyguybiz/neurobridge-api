@@ -7,3 +7,6 @@ results/*
 !results/.gitkeep
 .env
 
+dist/
+build/
+*.egg-info/

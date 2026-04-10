@@ -1,0 +1,66 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "neurobridge"
+version = "0.1.0"
+description = "Analysis engine for brain organoid data — 57 modules, from spike sorting to Organoid IQ"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+authors = [
+    {name = "Nikita Britikov", email = "neurobridge@neurocomputers.io"},
+]
+keywords = [
+    "neuroscience", "biocomputing", "organoid", "spike-sorting",
+    "brain-computer-interface", "MEA", "electrophysiology",
+    "organoid-intelligence", "FinalSpark", "Cortical-Labs",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "pandas>=2.0",
+    "scikit-learn>=1.3",
+]
+
+[project.optional-dependencies]
+full = [
+    "h5py>=3.9",
+    "matplotlib>=3.7",
+    "hdbscan>=0.8.33",
+]
+server = [
+    "fastapi>=0.100",
+    "uvicorn[standard]>=0.23",
+    "python-multipart>=0.0.6",
+    "pydantic>=2.0",
+]
+dev = [
+    "pytest>=7.4",
+    "httpx>=0.24",
+]
+
+[project.urls]
+Homepage = "https://neurocomputers.io"
+Documentation = "https://api.neurocomputers.io/docs"
+Repository = "https://github.com/Luckyguybiz/neurobridge-api"
+Issues = "https://github.com/Luckyguybiz/neurobridge-api/issues"
+
+[project.scripts]
+neurobridge = "neurobridge.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["neurobridge*"]
