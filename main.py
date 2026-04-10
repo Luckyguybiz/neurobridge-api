@@ -73,6 +73,8 @@ from analysis.transfer_learning import measure_transfer, compute_representationa
 from analysis.functional_connectome import build_full_connectome, detect_communities, compute_graph_theory_metrics
 from analysis.effective_connectivity import estimate_effective_connectivity, compute_causal_hierarchy
 from analysis.consolidation import detect_consolidation_events, measure_retention
+from analysis.multi_bit_memory import estimate_channel_capacity, measure_population_code_diversity
+from analysis.topology import compute_betti_numbers, compute_topological_complexity
 from models.schemas import (
     SpikeDetectionParams, BurstDetectionParams, SpikeSortingParams,
     ConnectivityParams, TimeRangeFilter, DatasetInfo,
@@ -1213,6 +1215,46 @@ async def api_forgetting(dataset_id: str):
     data = _get_dataset(dataset_id)
     t0 = time.time()
     result = compute_retention_curve(data)
+    result["_computation_time_ms"] = (time.time() - t0) * 1000
+    return _sanitize(result)
+
+
+@app.get("/api/analysis/{dataset_id}/channel-capacity")
+async def api_channel_capacity(dataset_id: str):
+    """Estimate information channel capacity (multi-bit memory)."""
+    data = _get_dataset(dataset_id)
+    t0 = time.time()
+    result = estimate_channel_capacity(data)
+    result["_computation_time_ms"] = (time.time() - t0) * 1000
+    return _sanitize(result)
+
+
+@app.get("/api/analysis/{dataset_id}/population-codes")
+async def api_population_codes(dataset_id: str):
+    """Measure population code diversity (distinct neural states)."""
+    data = _get_dataset(dataset_id)
+    t0 = time.time()
+    result = measure_population_code_diversity(data)
+    result["_computation_time_ms"] = (time.time() - t0) * 1000
+    return _sanitize(result)
+
+
+@app.get("/api/analysis/{dataset_id}/topology")
+async def api_topology(dataset_id: str):
+    """Compute Betti numbers (topological data analysis)."""
+    data = _get_dataset(dataset_id)
+    t0 = time.time()
+    result = compute_betti_numbers(data)
+    result["_computation_time_ms"] = (time.time() - t0) * 1000
+    return _sanitize(result)
+
+
+@app.get("/api/analysis/{dataset_id}/topological-complexity")
+async def api_topo_complexity(dataset_id: str):
+    """Compute topological complexity score."""
+    data = _get_dataset(dataset_id)
+    t0 = time.time()
+    result = compute_topological_complexity(data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
     return _sanitize(result)
 
