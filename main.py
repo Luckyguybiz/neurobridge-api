@@ -81,6 +81,10 @@ from analysis.effective_connectivity import estimate_effective_connectivity, com
 from analysis.consolidation import detect_consolidation_events, measure_retention
 from analysis.multi_bit_memory import estimate_channel_capacity, measure_population_code_diversity
 from analysis.topology import compute_betti_numbers, compute_topological_complexity
+from analysis.multi_organoid import split_into_organoids, compare_organoids
+from analysis.temporal_evolution import track_evolution, detect_trends, find_critical_moments
+from analysis.stim_response import detect_response, compute_dose_response, estimate_stim_times
+from analysis.llm_optimizer import generate_optimization_prompt, parse_llm_suggestion, run_optimization_loop
 from models.schemas import (
     SpikeDetectionParams, BurstDetectionParams, SpikeSortingParams,
     ConnectivityParams, TimeRangeFilter, DatasetInfo,
@@ -1468,6 +1472,105 @@ async def ws_live_spikes(ws: WebSocket):
             await asyncio.sleep(dt)
     except WebSocketDisconnect:
         pass
+
+
+# ═══════════ MULTI-ORGANOID ═══════════
+
+@app.get("/api/analysis/{dataset_id}/multi-organoid")
+async def analyze_multi_organoid(
+    dataset_id: str,
+    electrodes_per_organoid: int = Query(8, ge=1, le=32, description="Electrodes per virtual organoid"),
+):
+    """Compare multiple virtual organoids from a multi-MEA dataset."""
+    data = _get_dataset(dataset_id)
+    cached = _cache_get(dataset_id, f"multi-organoid-{electrodes_per_organoid}")
+    if cached:
+        return cached
+    t0 = time.time()
+    result = compare_organoids(data, electrodes_per_organoid=electrodes_per_organoid)
+    result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
+    _cache_set(dataset_id, f"multi-organoid-{electrodes_per_organoid}", result)
+    return _sanitize(result)
+
+
+# ═══════════ TEMPORAL EVOLUTION ═══════════
+
+@app.get("/api/analysis/{dataset_id}/temporal-evolution")
+async def analyze_temporal_evolution(
+    dataset_id: str,
+    window_sec: float = Query(60.0, ge=1.0, le=3600.0, description="Window size in seconds"),
+    mode: str = Query("full", description="Mode: full, trends, critical"),
+):
+    """Track how organoid properties evolve over time."""
+    data = _get_dataset(dataset_id)
+    t0 = time.time()
+    if mode == "trends":
+        result = detect_trends(data, window_sec=window_sec)
+    elif mode == "critical":
+        result = find_critical_moments(data, window_sec=window_sec)
+    else:
+        evolution = track_evolution(data, window_sec=window_sec)
+        trends = detect_trends(data, window_sec=window_sec)
+        critical = find_critical_moments(data, window_sec=window_sec)
+        result = {
+            "evolution": evolution,
+            "trends": trends,
+            "critical_moments": critical,
+        }
+    result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
+    return _sanitize(result)
+
+
+# ═══════════ STIMULATION RESPONSE ═══════════
+
+@app.get("/api/analysis/{dataset_id}/stim-response")
+async def analyze_stim_response(
+    dataset_id: str,
+    stim_times: Optional[str] = Query(None, description="Comma-separated stimulation times in seconds"),
+    window_ms: float = Query(200.0, ge=10.0, le=5000.0, description="Post-stimulus window in ms"),
+):
+    """Analyze organoid response to stimulation events."""
+    data = _get_dataset(dataset_id)
+    t0 = time.time()
+
+    if stim_times:
+        stim_list = [float(t.strip()) for t in stim_times.split(",")]
+        result = detect_response(data, stim_times=stim_list, window_ms=window_ms)
+    else:
+        # Auto-detect stimulation times
+        estimated = estimate_stim_times(data)
+        stim_list = estimated.get("estimated_stim_times", [])
+        if stim_list:
+            response = detect_response(data, stim_times=stim_list, window_ms=window_ms)
+            result = {
+                "stim_detection": estimated,
+                "response_analysis": response,
+                "note": "Stimulation times were auto-detected from spike patterns",
+            }
+        else:
+            result = {
+                "stim_detection": estimated,
+                "note": "No stimulation events detected. Provide stim_times parameter manually.",
+            }
+
+    result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
+    return _sanitize(result)
+
+
+# ═══════════ LLM OPTIMIZER ═══════════
+
+@app.post("/api/analysis/{dataset_id}/llm-optimize")
+async def analyze_llm_optimize(
+    dataset_id: str,
+    n_iterations: int = Query(5, ge=1, le=20, description="Number of optimization iterations"),
+    objective: str = Query("maximize_complexity", description="Optimization objective"),
+):
+    """Run LLM-in-the-loop protocol optimization (simulated)."""
+    data = _get_dataset(dataset_id)
+    t0 = time.time()
+    result = run_optimization_loop(data, n_iterations=n_iterations, objective=objective)
+    result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
+    return _sanitize(result)
 
 
 # ═══════════ EXPORT ═══════════
