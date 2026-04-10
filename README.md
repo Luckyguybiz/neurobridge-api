@@ -2,9 +2,16 @@
 
 **The analysis engine for biological neural networks.**
 
-25 analysis modules · 60+ API endpoints · One-click full report on any organoid recording.
+57 analysis modules · 125 API endpoints · One-click full report on any organoid recording.
+
+[![Live API](https://img.shields.io/badge/API-live-brightgreen)](https://api.neurocomputers.io/docs)
+[![Tests](https://img.shields.io/badge/tests-55%20passed-brightgreen)]()
+[![Python](https://img.shields.io/badge/python-3.9+-blue)]()
+[![License: MIT](https://img.shields.io/badge/license-MIT-yellow)](LICENSE)
 
 Built for researchers working with brain organoids on [FinalSpark](https://finalspark.com), [Cortical Labs](https://corticallabs.com), and university MEA platforms.
+
+**Live:** [neurocomputers.io](https://neurocomputers.io) | **API Docs:** [api.neurocomputers.io/docs](https://api.neurocomputers.io/docs)
 
 ---
 
@@ -12,7 +19,7 @@ Built for researchers working with brain organoids on [FinalSpark](https://final
 
 ```bash
 # Clone
-git clone https://github.com/YOUR_USER/neurobridge-api.git
+git clone https://github.com/Luckyguybiz/neurobridge-api.git
 cd neurobridge-api
 
 # Setup
@@ -85,6 +92,50 @@ Supported formats: CSV, HDF5, Parquet, JSON, NWB.
 | **Predictions** | `/analysis/{id}/predict/bursts` | Burst probability forecast |
 | **Anomaly Detection** | `/analysis/{id}/anomalies` | Isolation Forest on neural features |
 | **State Classification** | `/analysis/{id}/states` | Resting / active / bursting states |
+
+### Discovery Analysis (10 modules)
+
+| Module | Endpoint | What it does |
+|--------|----------|-------------|
+| **Sleep-Wake** | `/analysis/{id}/sleep-wake` | UP/DOWN state detection, slow-wave oscillations |
+| **Habituation** | `/analysis/{id}/habituation` | Response decay — simplest form of learning |
+| **Metastability** | `/analysis/{id}/metastability` | Kuramoto synchronization, brain-like state switching |
+| **Information Flow** | `/analysis/{id}/information-flow` | Granger causality, hub detection |
+| **Network Motifs** | `/analysis/{id}/motifs` | 3-node subgraph patterns vs random |
+| **Energy Landscape** | `/analysis/{id}/energy-landscape` | Ising model, attractor basins |
+| **Consciousness** | `/analysis/{id}/consciousness` | PCI + Phi + recurrence composite score |
+| **Comparative** | `/analysis/{id}/comparative` | vs cortical slice, C. elegans, fruit fly, mouse hippocampus |
+| **Turing Test** | `/analysis/{id}/turing-test` | Can you distinguish from Poisson/LIF? |
+| **Welfare** | `/analysis/{id}/welfare` | Health + suffering detection + recommendations |
+
+### Learning & Memory (4 modules)
+
+| Module | Endpoint | What it does |
+|--------|----------|-------------|
+| **Catastrophic Forgetting** | `/analysis/{id}/forgetting` | Do early patterns survive over time? |
+| **Transfer Learning** | `/analysis/{id}/transfer` | Does learning task A help task B? |
+| **Consolidation** | `/analysis/{id}/consolidation` | Offline memory consolidation events |
+| **Channel Capacity** | `/analysis/{id}/channel-capacity` | Multi-bit information capacity |
+
+### Connectomics (5 endpoints)
+
+| Module | Endpoint | What it does |
+|--------|----------|-------------|
+| **Full Connectome** | `/analysis/{id}/connectome` | Weighted adjacency, communities, modularity |
+| **Graph Theory** | `/analysis/{id}/graph-theory` | Rich-club, small-world, efficiency, centrality |
+| **Effective Connectivity** | `/analysis/{id}/effective-connectivity` | Directed causal connections |
+| **Topology** | `/analysis/{id}/topology` | Betti numbers, persistent homology |
+
+### Experiments (6 endpoints)
+
+| Module | Endpoint | What it does |
+|--------|----------|-------------|
+| **Pong** | `POST /experiments/{id}/pong/simulate` | DishBrain Pong simulation |
+| **Logic Gates** | `POST /experiments/{id}/logic/benchmark` | AND, OR, XOR, NAND benchmark |
+| **Vowels** | `POST /experiments/{id}/vowels/simulate` | Brainoware 240-vowel classification |
+| **Memory Tests** | `/experiments/{id}/memory-tests` | Working, short-term, long-term, associative |
+| **Closed-Loop** | `POST /experiments/{id}/closed-loop/simulate` | DishBrain mode simulation |
+| **Architecture Search** | `POST /analysis/{id}/architecture-search` | NAS for optimal stimulation |
 
 ### Full Report
 
