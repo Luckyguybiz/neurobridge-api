@@ -72,6 +72,8 @@ from analysis.genetic_programming import evolve_programs
 from analysis.homeostatic_plasticity import monitor_homeostasis
 from analysis.suffering_detector import detect_suffering
 from analysis.welfare_report import generate_welfare_report
+from analysis.swarm_organoid import simulate_swarm
+from analysis.morphological_computing import analyze_morphological_computation
 from analysis.catastrophic_forgetting import measure_forgetting, compute_retention_curve
 from analysis.transfer_learning import measure_transfer, compute_representational_similarity
 from analysis.functional_connectome import build_full_connectome, detect_communities, compute_graph_theory_metrics
@@ -1383,6 +1385,26 @@ async def api_welfare(dataset_id: str):
     data = _get_dataset(dataset_id)
     t0 = time.time()
     result = generate_welfare_report(data)
+    result["_computation_time_ms"] = (time.time() - t0) * 1000
+    return _sanitize(result)
+
+
+@app.get("/api/analysis/{dataset_id}/swarm")
+async def api_swarm(dataset_id: str, n_organoids: int = 4):
+    """Simulate multi-organoid swarm intelligence."""
+    data = _get_dataset(dataset_id)
+    t0 = time.time()
+    result = simulate_swarm(data, n_organoids=n_organoids)
+    result["_computation_time_ms"] = (time.time() - t0) * 1000
+    return _sanitize(result)
+
+
+@app.get("/api/analysis/{dataset_id}/morphology")
+async def api_morphology(dataset_id: str):
+    """Analyze morphological computing — structure vs function."""
+    data = _get_dataset(dataset_id)
+    t0 = time.time()
+    result = analyze_morphological_computation(data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
     return _sanitize(result)
 
