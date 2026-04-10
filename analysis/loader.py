@@ -147,19 +147,20 @@ def load_csv(filepath: str, **kwargs) -> SpikeData:
     """Load spike data from CSV file.
 
     Expected columns: time, electrode, amplitude
+    Also supports FinalSpark format: _time (ISO 8601), _value (amplitude µV), index (electrode)
     Optional columns: waveform (comma-separated values in a single column)
     """
-    df = pd.read_csv(filepath)
+    df = pd.read_csv(filepath, **{k: v for k, v in kwargs.items() if k == "sep"})
 
     # Normalize column names
     col_map = {}
     for col in df.columns:
         lower = col.lower().strip()
-        if lower in ("time", "timestamp", "t", "time_s", "time_sec"):
+        if lower in ("time", "timestamp", "t", "time_s", "time_sec", "_time"):
             col_map["time"] = col
-        elif lower in ("electrode", "channel", "ch", "electrode_id", "chan"):
+        elif lower in ("electrode", "channel", "ch", "electrode_id", "chan", "index"):
             col_map["electrode"] = col
-        elif lower in ("amplitude", "amp", "voltage", "value", "amplitude_uv"):
+        elif lower in ("amplitude", "amp", "voltage", "value", "amplitude_uv", "_value"):
             col_map["amplitude"] = col
 
     if "time" not in col_map:
@@ -171,7 +172,16 @@ def load_csv(filepath: str, **kwargs) -> SpikeData:
             if len(numeric_cols) >= 3:
                 col_map["amplitude"] = numeric_cols[2]
 
-    times = df[col_map["time"]].values
+    # Handle ISO 8601 timestamps (FinalSpark _time column)
+    time_col = df[col_map["time"]]
+    if time_col.dtype == object or pd.api.types.is_string_dtype(time_col):
+        # Parse datetime strings and convert to seconds from recording start
+        parsed = pd.to_datetime(time_col, utc=True)
+        t0 = parsed.min()
+        times = (parsed - t0).dt.total_seconds().values
+    else:
+        times = time_col.values
+
     electrodes = df[col_map["electrode"]].values.astype(np.int32)
 
     # Apply modulo 32 for FinalSpark electrode indexing
@@ -182,7 +192,7 @@ def load_csv(filepath: str, **kwargs) -> SpikeData:
     return SpikeData(
         times=times,
         electrodes=electrodes,
-        amplitudes=amplitudes,
+        amplitudes=amplitudes.astype(np.float64),
         sampling_rate=kwargs.get("sampling_rate", 30000.0),
         metadata={"source": filepath, "format": "csv"},
     )
@@ -261,9 +271,9 @@ def load_json(filepath: str, **kwargs) -> SpikeData:
 def _from_dataframe(df: pd.DataFrame, filepath: str, fmt: str, **kwargs) -> SpikeData:
     """Convert DataFrame to SpikeData with column auto-detection."""
     col_candidates = {
-        "time": ["time", "timestamp", "t", "time_s"],
-        "electrode": ["electrode", "channel", "ch", "electrode_id"],
-        "amplitude": ["amplitude", "amp", "voltage", "value"],
+        "time": ["time", "timestamp", "t", "time_s", "_time"],
+        "electrode": ["electrode", "channel", "ch", "electrode_id", "index"],
+        "amplitude": ["amplitude", "amp", "voltage", "value", "_value"],
     }
     col_map = {}
     for field, candidates in col_candidates.items():
@@ -281,10 +291,19 @@ def _from_dataframe(df: pd.DataFrame, filepath: str, fmt: str, **kwargs) -> Spik
             if len(numeric) >= 3:
                 col_map["amplitude"] = numeric[2]
 
+    # Handle ISO 8601 timestamps
+    time_col = df[col_map["time"]]
+    if time_col.dtype == object or pd.api.types.is_string_dtype(time_col):
+        parsed = pd.to_datetime(time_col, utc=True)
+        t0 = parsed.min()
+        times = (parsed - t0).dt.total_seconds().values
+    else:
+        times = time_col.values
+
     return SpikeData(
-        times=df[col_map["time"]].values,
+        times=times,
         electrodes=df[col_map["electrode"]].values.astype(np.int32) % 32,
-        amplitudes=df[col_map.get("amplitude", col_map["time"])].values if "amplitude" in col_map else np.zeros(len(df)),
+        amplitudes=df[col_map.get("amplitude", col_map["time"])].values.astype(np.float64) if "amplitude" in col_map else np.zeros(len(df)),
         sampling_rate=kwargs.get("sampling_rate", 30000.0),
         metadata={"source": filepath, "format": fmt},
     )
