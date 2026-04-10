@@ -16,7 +16,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, Query
+from fastapi import FastAPI, UploadFile, File, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 import numpy as np
@@ -1431,6 +1431,43 @@ async def api_morphology(dataset_id: str):
     result = analyze_morphological_computation(data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
     return _sanitize(result)
+
+
+# ═══════════ WEBSOCKET — REAL-TIME STREAMING ═══════════
+
+import asyncio
+
+@app.websocket("/ws/spikes")
+async def ws_live_spikes(ws: WebSocket):
+    """Stream synthetic spike data in real-time via WebSocket.
+
+    Sends JSON frames every 100ms with spike events.
+    Protocol: connect → receive frames → disconnect.
+    Each frame: {"spikes": [{"time": float, "electrode": int, "amplitude": float}], "timestamp": float}
+    """
+    await ws.accept()
+    t = 0.0
+    dt = 0.1  # 100ms intervals
+    try:
+        while True:
+            # Generate spikes for this time window
+            n_spikes = np.random.poisson(5)  # ~50 Hz total
+            spikes = []
+            for _ in range(n_spikes):
+                spikes.append({
+                    "time": round(t + np.random.uniform(0, dt), 4),
+                    "electrode": int(np.random.randint(0, 8)),
+                    "amplitude": round(float(np.random.normal(-50, 15)), 1),
+                })
+            await ws.send_json({
+                "spikes": spikes,
+                "timestamp": round(t, 3),
+                "n_spikes": len(spikes),
+            })
+            t += dt
+            await asyncio.sleep(dt)
+    except WebSocketDisconnect:
+        pass
 
 
 # ═══════════ EXPORT ═══════════
