@@ -99,6 +99,30 @@ app = FastAPI(
 )
 
 
+# ─── Analysis cache (LRU, max 100 results, keyed by dataset_id + analysis_name) ───
+from collections import OrderedDict
+
+_analysis_cache: OrderedDict = OrderedDict()
+_CACHE_MAX = 100
+
+def _cache_key(dataset_id: str, analysis: str) -> str:
+    return f"{dataset_id}:{analysis}"
+
+def _cache_get(dataset_id: str, analysis: str):
+    key = _cache_key(dataset_id, analysis)
+    if key in _analysis_cache:
+        _analysis_cache.move_to_end(key)
+        return _analysis_cache[key]
+    return None
+
+def _cache_set(dataset_id: str, analysis: str, result: dict):
+    key = _cache_key(dataset_id, analysis)
+    _analysis_cache[key] = result
+    _analysis_cache.move_to_end(key)
+    while len(_analysis_cache) > _CACHE_MAX:
+        _analysis_cache.popitem(last=False)
+
+
 # Fix numpy serialization
 import json as _json
 
@@ -748,7 +772,7 @@ async def api_energy_landscape(dataset_id: str):
 
 
 @app.post("/api/analysis/{dataset_id}/design-stimulus")
-async def api_design_stimulus(dataset_id: str, generations: int = 30, population_size: int = 15):
+async def api_design_stimulus(dataset_id: str, generations: int = 15, population_size: int = 10):
     """Evolve optimal stimulation protocol using digital twin."""
     data = _get_dataset(dataset_id)
     t0 = time.time()
@@ -1194,7 +1218,7 @@ async def api_turing_test(dataset_id: str):
 
 
 @app.post("/api/analysis/{dataset_id}/architecture-search")
-async def api_architecture_search(dataset_id: str, generations: int = 30, population_size: int = 20):
+async def api_architecture_search(dataset_id: str, generations: int = 15, population_size: int = 10):
     """Neural Architecture Search for optimal stimulation protocol."""
     data = _get_dataset(dataset_id)
     t0 = time.time()
@@ -1350,7 +1374,7 @@ async def api_causal_hierarchy(dataset_id: str):
 # ═══════════ BIO-INSPIRED & ETHICS ═══════════
 
 @app.post("/api/analysis/{dataset_id}/evolve-programs")
-async def api_evolve_programs(dataset_id: str, generations: int = 50):
+async def api_evolve_programs(dataset_id: str, generations: int = 20):
     """Genetic programming — evolve stimulation program trees."""
     data = _get_dataset(dataset_id)
     t0 = time.time()
