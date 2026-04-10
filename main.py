@@ -65,6 +65,13 @@ from analysis.experiment_tracker import start_experiment, end_experiment, get_ex
 from analysis.publication_generator import generate_draft, generate_abstract_only, generate_methods_section
 from analysis.ethical_assessment import assess_ethics, assess_consciousness_indicators, compute_sentience_risk_score
 from analysis.grant_matcher import match_grants, get_grant_details, list_grants
+from analysis.turing_test import run_turing_test
+from analysis.neural_architecture_search import search_optimal_protocol
+from analysis.hybrid_ai import benchmark_hybrid
+from analysis.catastrophic_forgetting import measure_forgetting, compute_retention_curve
+from analysis.transfer_learning import measure_transfer, compute_representational_similarity
+from analysis.functional_connectome import build_full_connectome, detect_communities, compute_graph_theory_metrics
+from analysis.effective_connectivity import estimate_effective_connectivity, compute_causal_hierarchy
 from models.schemas import (
     SpikeDetectionParams, BurstDetectionParams, SpikeSortingParams,
     ConnectivityParams, TimeRangeFilter, DatasetInfo,
@@ -1162,6 +1169,122 @@ async def api_funding_grant_detail(grant_id: str):
     result = get_grant_details(grant_id)
     if "error" in result:
         raise HTTPException(status_code=404, detail=result["error"])
+    return _sanitize(result)
+
+
+# ═══════════ COMPUTATION & AI ═══════════
+
+@app.get("/api/analysis/{dataset_id}/turing-test")
+async def api_turing_test(dataset_id: str):
+    """Run organoid Turing test — compare real data vs Poisson and LIF models."""
+    data = _get_dataset(dataset_id)
+    t0 = time.time()
+    result = run_turing_test(data)
+    result["_computation_time_ms"] = (time.time() - t0) * 1000
+    return _sanitize(result)
+
+
+@app.post("/api/analysis/{dataset_id}/architecture-search")
+async def api_architecture_search(dataset_id: str, generations: int = 30, population_size: int = 20):
+    """Neural Architecture Search for optimal stimulation protocol."""
+    data = _get_dataset(dataset_id)
+    t0 = time.time()
+    result = search_optimal_protocol(data, population_size=population_size, generations=generations)
+    result["_computation_time_ms"] = (time.time() - t0) * 1000
+    return _sanitize(result)
+
+
+@app.get("/api/analysis/{dataset_id}/hybrid-benchmark")
+async def api_hybrid_benchmark(dataset_id: str):
+    """Benchmark hybrid bio-digital AI vs pure digital vs pure biological."""
+    data = _get_dataset(dataset_id)
+    t0 = time.time()
+    result = benchmark_hybrid(data)
+    result["_computation_time_ms"] = (time.time() - t0) * 1000
+    return _sanitize(result)
+
+
+# ═══════════ LEARNING & MEMORY ═══════════
+
+@app.get("/api/analysis/{dataset_id}/forgetting")
+async def api_forgetting(dataset_id: str):
+    """Measure catastrophic forgetting — do early patterns survive?"""
+    data = _get_dataset(dataset_id)
+    t0 = time.time()
+    result = compute_retention_curve(data)
+    result["_computation_time_ms"] = (time.time() - t0) * 1000
+    return _sanitize(result)
+
+
+@app.get("/api/analysis/{dataset_id}/transfer")
+async def api_transfer(dataset_id: str):
+    """Measure transfer learning between recording segments."""
+    data = _get_dataset(dataset_id)
+    t0 = time.time()
+    result = measure_transfer(data)
+    result["_computation_time_ms"] = (time.time() - t0) * 1000
+    return _sanitize(result)
+
+
+@app.get("/api/analysis/{dataset_id}/rsa")
+async def api_rsa(dataset_id: str):
+    """Representational Similarity Analysis."""
+    data = _get_dataset(dataset_id)
+    t0 = time.time()
+    result = compute_representational_similarity(data)
+    result["_computation_time_ms"] = (time.time() - t0) * 1000
+    return _sanitize(result)
+
+
+# ═══════════ CONNECTOMICS ═══════════
+
+@app.get("/api/analysis/{dataset_id}/connectome")
+async def api_connectome(dataset_id: str):
+    """Build full functional connectome with graph theory metrics."""
+    data = _get_dataset(dataset_id)
+    t0 = time.time()
+    result = build_full_connectome(data)
+    result["_computation_time_ms"] = (time.time() - t0) * 1000
+    return _sanitize(result)
+
+
+@app.get("/api/analysis/{dataset_id}/communities")
+async def api_communities(dataset_id: str):
+    """Detect network communities (modules) via spectral clustering."""
+    data = _get_dataset(dataset_id)
+    t0 = time.time()
+    result = detect_communities(data)
+    result["_computation_time_ms"] = (time.time() - t0) * 1000
+    return _sanitize(result)
+
+
+@app.get("/api/analysis/{dataset_id}/graph-theory")
+async def api_graph_theory(dataset_id: str):
+    """Compute rich-club, small-world, efficiency, betweenness centrality."""
+    data = _get_dataset(dataset_id)
+    t0 = time.time()
+    result = compute_graph_theory_metrics(data)
+    result["_computation_time_ms"] = (time.time() - t0) * 1000
+    return _sanitize(result)
+
+
+@app.get("/api/analysis/{dataset_id}/effective-connectivity")
+async def api_effective_connectivity(dataset_id: str):
+    """Estimate directed causal connections (effective connectivity)."""
+    data = _get_dataset(dataset_id)
+    t0 = time.time()
+    result = estimate_effective_connectivity(data)
+    result["_computation_time_ms"] = (time.time() - t0) * 1000
+    return _sanitize(result)
+
+
+@app.get("/api/analysis/{dataset_id}/causal-hierarchy")
+async def api_causal_hierarchy(dataset_id: str):
+    """Order electrodes by causal influence hierarchy."""
+    data = _get_dataset(dataset_id)
+    t0 = time.time()
+    result = compute_causal_hierarchy(data)
+    result["_computation_time_ms"] = (time.time() - t0) * 1000
     return _sanitize(result)
 
 
