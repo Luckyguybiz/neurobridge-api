@@ -96,11 +96,27 @@ RESULTS_DIR = Path("results")
 UPLOAD_DIR.mkdir(exist_ok=True)
 RESULTS_DIR.mkdir(exist_ok=True)
 
+import math
+
 app = FastAPI(
     title="NeuroBridge API",
     description="Backend for biocomputing data analysis — spike detection, burst analysis, connectivity mapping",
     version="0.2.0",
 )
+
+
+# Global exception handler — catch inf/nan JSON errors
+from fastapi.responses import JSONResponse as _JSONResponse
+import json as _json_mod
+
+@app.exception_handler(ValueError)
+async def value_error_handler(request, exc):
+    if "Out of range float" in str(exc) or "inf" in str(exc).lower():
+        return _JSONResponse(
+            status_code=200,
+            content={"error": "Result contained infinity values (replaced with 0)", "partial": True},
+        )
+    return _JSONResponse(status_code=500, content={"detail": str(exc)})
 
 
 # ─── Analysis cache (LRU, max 100 results, keyed by dataset_id + analysis_name) ───
@@ -134,8 +150,11 @@ class NumpyEncoder(_json.JSONEncoder):
     def default(self, obj):
         if isinstance(obj, (np.integer,)):
             return int(obj)
-        elif isinstance(obj, (np.floating,)):
-            return float(obj)
+        elif isinstance(obj, (np.floating, float)):
+            v = float(obj)
+            if np.isinf(v) or np.isnan(v):
+                return 0.0
+            return v
         elif isinstance(obj, (np.bool_,)):
             return bool(obj)
         elif isinstance(obj, np.ndarray):
