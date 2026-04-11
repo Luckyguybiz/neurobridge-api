@@ -298,6 +298,57 @@ async def generate_synthetic(
     }
 
 
+@app.post("/api/load-local")
+async def load_local_file(filename: str = Query("SpikeDataToShare_fs437data.csv"), sampling_rate: float = Query(437.0)):
+    """Load a CSV file from server's data/ directory."""
+    import pandas as pd
+    filepath = Path("data") / filename
+    if not filepath.exists():
+        raise HTTPException(status_code=404, detail=f"File {filename} not found in data/")
+
+    dataset_id = str(uuid.uuid4())[:8]
+    df = pd.read_csv(filepath)
+
+    # Parse FinalSpark format: _time, _value, index
+    if '_time' in df.columns and '_value' in df.columns and 'index' in df.columns:
+        times_dt = pd.to_datetime(df['_time'])
+        t0 = times_dt.min()
+        time_sec = (times_dt - t0).dt.total_seconds().values
+        electrodes = df['index'].values % 32  # FinalSpark uses 32 electrodes
+        amplitudes = df['_value'].values
+
+        # Subsample if too large (>500K spikes → take first MEA, 10min windows)
+        if len(time_sec) > 500000:
+            # Take first MEA (electrodes 0-7) and first 30 minutes
+            mask = (electrodes < 8) & (time_sec <= 1800)
+            time_sec = time_sec[mask]
+            electrodes = electrodes[mask]
+            amplitudes = amplitudes[mask]
+
+        data = SpikeData(times=time_sec, electrodes=electrodes, amplitudes=amplitudes, sampling_rate=sampling_rate)
+    else:
+        data = load_file(str(filepath), sampling_rate=sampling_rate)
+
+    datasets[dataset_id] = data
+    return {
+        "dataset_id": dataset_id,
+        "filename": filename,
+        "n_spikes": data.n_spikes,
+        "n_electrodes": data.n_electrodes,
+        "duration_s": round(data.duration, 3),
+    }
+
+
+@app.get("/api/local-files")
+async def list_local_files():
+    """List CSV files available in data/ directory."""
+    data_dir = Path("data")
+    if not data_dir.exists():
+        return {"files": []}
+    files = [f.name for f in data_dir.iterdir() if f.suffix in ('.csv', '.h5', '.hdf5', '.parquet', '.json')]
+    return {"files": files}
+
+
 @app.get("/api/datasets")
 async def list_datasets():
     """List all loaded datasets."""

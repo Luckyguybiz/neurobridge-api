@@ -10,3 +10,4 @@ results/*
 dist/
 build/
 *.egg-info/
+data/*.csv
