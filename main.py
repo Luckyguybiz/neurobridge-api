@@ -152,12 +152,15 @@ def _sanitize(obj):
         return [_sanitize(v) for v in obj]
     elif isinstance(obj, (np.integer,)):
         return int(obj)
-    elif isinstance(obj, (np.floating,)):
-        return float(obj)
+    elif isinstance(obj, (np.floating, float)):
+        v = float(obj)
+        if np.isinf(v) or np.isnan(v):
+            return 0.0
+        return v
     elif isinstance(obj, (np.bool_,)):
         return bool(obj)
     elif isinstance(obj, np.ndarray):
-        return obj.tolist()
+        return _sanitize(obj.tolist())
     return obj
 
 app.add_middleware(
