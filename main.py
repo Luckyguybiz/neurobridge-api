@@ -60,6 +60,11 @@ from analysis.curriculum import run_curriculum, get_current_stage, simulate_stag
 from analysis.memory_tests import run_memory_battery, test_working_memory, test_short_term_memory, test_long_term_memory, test_associative_memory
 from analysis.pong_engine import simulate_pong, encode_ball_state
 from analysis.xor_benchmark import run_full_benchmark, run_gate_benchmark, compute_xor_difficulty
+from analysis.protocols.center_activity import compute_center_of_activity, simulate_ca_shift
+from analysis.protocols.dishbrain_pong import simulate_pong_game
+from analysis.protocols.brainoware_reservoir import simulate_reservoir_classification
+from analysis.protocols.cartpole_coaching import simulate_cartpole
+from analysis.protocols.dopamine_reinforcement import simulate_dopamine_training
 from analysis.japanese_vowels import generate_synthetic_vowels, build_reservoir, reservoir_transform, train_linear_readout
 from analysis.experiment_tracker import start_experiment, end_experiment, get_experiment as tracker_get_experiment, get_history as get_experiment_history, compute_delta as tracker_compute_delta, clear_experiments as tracker_clear_experiments
 from analysis.publication_generator import generate_draft, generate_abstract_only, generate_methods_section
@@ -1647,6 +1652,60 @@ async def analyze_llm_optimize(
     data = _get_dataset(dataset_id)
     t0 = time.time()
     result = run_optimization_loop(data, n_iterations=n_iterations, objective=objective)
+    result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
+    return _sanitize(result)
+
+
+# ═══════════ EXPERIMENT PROTOCOLS ═══════════
+
+@app.post("/api/protocols/center-activity/{dataset_id}/simulate")
+async def protocol_center_activity(dataset_id: str, n_steps: int = Query(20)):
+    """Center of Activity Protocol -- shift neural activity via distant electrode stimulation."""
+    data = _get_dataset(dataset_id)
+    t0 = time.time()
+    ca = compute_center_of_activity(data)
+    shift = simulate_ca_shift(data, n_steps=n_steps)
+    result = {"center_of_activity": ca, "simulation": shift}
+    result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
+    return _sanitize(result)
+
+
+@app.post("/api/protocols/dishbrain-pong/{dataset_id}/simulate")
+async def protocol_dishbrain_pong(dataset_id: str, n_trials: int = Query(100)):
+    """DishBrain Pong Protocol -- train organoid to play Pong via free energy principle."""
+    data = _get_dataset(dataset_id)
+    t0 = time.time()
+    result = simulate_pong_game(data, n_trials=n_trials)
+    result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
+    return _sanitize(result)
+
+
+@app.post("/api/protocols/brainoware/{dataset_id}/simulate")
+async def protocol_brainoware(dataset_id: str, n_classes: int = Query(4), n_samples: int = Query(100)):
+    """Brainoware Reservoir Computing -- organoid as nonlinear reservoir for classification."""
+    data = _get_dataset(dataset_id)
+    t0 = time.time()
+    result = simulate_reservoir_classification(data, n_classes=n_classes, n_samples=n_samples)
+    result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
+    return _sanitize(result)
+
+
+@app.post("/api/protocols/cartpole/{dataset_id}/simulate")
+async def protocol_cartpole(dataset_id: str, n_episodes: int = Query(50), max_steps: int = Query(200)):
+    """Cart-Pole Coaching -- balance inverted pendulum with adaptive coaching."""
+    data = _get_dataset(dataset_id)
+    t0 = time.time()
+    result = simulate_cartpole(data, n_episodes=n_episodes, max_steps=max_steps)
+    result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
+    return _sanitize(result)
+
+
+@app.post("/api/protocols/dopamine/{dataset_id}/simulate")
+async def protocol_dopamine(dataset_id: str, n_trials: int = Query(100)):
+    """Dopamine UV Reinforcement -- chemical reward via UV-activated dopamine release."""
+    data = _get_dataset(dataset_id)
+    t0 = time.time()
+    result = simulate_dopamine_training(data, n_trials=n_trials)
     result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
     return _sanitize(result)
 
