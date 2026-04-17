@@ -1863,4 +1863,4 @@ def _get_dataset_capped(dataset_id: str, max_spikes: int = _MAX_SPIKES_HEAVY) ->
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8847, workers=2)
+    uvicorn.run(app, host="0.0.0.0", port=8847)
