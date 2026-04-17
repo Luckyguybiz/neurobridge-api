@@ -104,9 +104,9 @@ def compute_fingerprint(data: SpikeData) -> dict:
     feature_names.extend(["amp_mean", "amp_std", "amp_median", "amp_p10", "amp_p90", "amp_max", "amp_cv", "amp_outlier_frac"])
 
     # 4. Burst characteristics (8 dims)
-    from .bursts import detect_bursts
-    burst_result = detect_bursts(data)
-    bursts = burst_result.get("bursts", [])
+    from .bursts import analyze_bursts
+    burst_result = analyze_bursts(data)
+    bursts = burst_result.get("network", {}).get("bursts", burst_result.get("bursts", []))
 
     burst_features = [
         float(burst_result.get("burst_rate_per_min", 0)),
@@ -124,14 +124,15 @@ def compute_fingerprint(data: SpikeData) -> dict:
     feature_names.extend(["burst_rate", "burst_dur", "burst_electrodes", "burst_time_pct", "ibi_cv", "n_bursts", "mean_ibi", "peak_burst_rate"])
 
     # 5. Connectivity fingerprint (8 dims)
-    from .connectivity import compute_connectivity_graph
-    conn = compute_connectivity_graph(data)
+    from .connectivity import compute_connectivity_graph, connectivity_to_dict
+    conn = connectivity_to_dict(compute_connectivity_graph(data))
 
+    gm = conn.get("graph_metrics", {})
     conn_features = [
-        float(conn.get("density", 0)),
-        float(conn.get("mean_clustering", 0)),
-        float(conn.get("mean_degree", 0)),
-        float(conn.get("mean_strength", 0)),
+        float(gm.get("density", 0)),
+        float(gm.get("mean_clustering", 0)),
+        float(gm.get("mean_degree", 0)),
+        float(conn.get("n_edges", 0)),  # mean_strength not in dict, use n_edges
         float(conn.get("n_edges", 0)),
         0, 0, 0,  # placeholder for future graph metrics
     ]

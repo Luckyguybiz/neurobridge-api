@@ -62,7 +62,9 @@ def compute_recurrent_processing(data: SpikeData) -> dict:
     from .connectivity import compute_transfer_entropy
     te = compute_transfer_entropy(data)
 
-    matrix = np.array(te.get("matrix", te.get("te_matrix", [[0]])))
+    matrix = np.array(getattr(te, 'te_matrix', None) if not isinstance(te, dict) else te.get("te_matrix", te.get("matrix", [[0]])))
+    if matrix is None:
+        matrix = np.array([[0]])
     if matrix.ndim != 2 or matrix.shape[0] < 2:
         return {"recurrence_index": 0.0}
 

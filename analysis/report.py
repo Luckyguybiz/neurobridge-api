@@ -58,7 +58,7 @@ def generate_full_report(data: SpikeData) -> dict:
 
     # 7. Network burst detection
     try:
-        report["bursts"] = bursts.detect_bursts(data)
+        report["bursts"] = bursts.analyze_bursts(data)
     except Exception as e:
         errors.append(f"bursts: {e}")
 
@@ -76,27 +76,22 @@ def generate_full_report(data: SpikeData) -> dict:
 
     # 9. Functional connectivity
     try:
-        report["connectivity"] = connectivity.compute_connectivity_graph(data)
+        conn = connectivity.compute_connectivity_graph(data)
+        report["connectivity"] = connectivity.connectivity_to_dict(conn)
     except Exception as e:
         errors.append(f"connectivity: {e}")
 
     # 10. Cross-correlation
     try:
-        report["cross_correlation"] = connectivity.compute_cross_correlation(data)
-        # Remove large arrays for report compactness
-        if "correlograms" in report["cross_correlation"]:
-            for key in report["cross_correlation"]["correlograms"]:
-                del report["cross_correlation"]["correlograms"][key]["counts"]
-                del report["cross_correlation"]["correlograms"][key]["normalized"]
-                del report["cross_correlation"]["correlograms"][key]["lag_ms"]
+        ccg = connectivity.compute_cross_correlation(data)
+        report["cross_correlation"] = ccg.to_dict() if hasattr(ccg, 'to_dict') else ccg
     except Exception as e:
         errors.append(f"cross_corr: {e}")
 
     # 11. Transfer entropy
     try:
-        report["transfer_entropy"] = connectivity.compute_transfer_entropy(data)
-        if "te_matrix" in report["transfer_entropy"]:
-            del report["transfer_entropy"]["te_matrix"]  # compact
+        te = connectivity.compute_transfer_entropy(data)
+        report["transfer_entropy"] = te.to_dict() if hasattr(te, 'to_dict') else te
     except Exception as e:
         errors.append(f"transfer_entropy: {e}")
 
@@ -141,7 +136,7 @@ def generate_full_report(data: SpikeData) -> dict:
 
     # 17. Criticality / avalanches
     try:
-        crit = criticality.detect_avalanches(data)
+        crit = criticality.analyse_criticality(data)
         crit.pop("avalanches", None)  # compact
         crit.pop("size_distribution", None)
         report["criticality"] = crit

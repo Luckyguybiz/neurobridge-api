@@ -6,11 +6,12 @@ compares with random networks to find over/under-represented patterns.
 import numpy as np
 from itertools import permutations
 from .loader import SpikeData
-from .connectivity import compute_connectivity_graph
+from .connectivity import compute_connectivity_graph, connectivity_to_dict
 
 def enumerate_motifs(data: SpikeData, threshold: float = 0.02) -> dict:
     """Enumerate 3-node motifs in the functional connectivity graph."""
-    graph = compute_connectivity_graph(data, min_strength=threshold)
+    conn = compute_connectivity_graph(data)
+    graph = connectivity_to_dict(conn)
     edges = graph.get("edges", [])
     nodes = [n["id"] for n in graph.get("nodes", [])]
     n = len(nodes)

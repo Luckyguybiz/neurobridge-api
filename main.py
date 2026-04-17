@@ -23,12 +23,12 @@ import numpy as np
 
 from analysis.loader import SpikeData, load_file
 from analysis.spikes import compute_isi, compute_firing_rates, compute_amplitude_stats, sort_spikes
-from analysis.bursts import detect_bursts, compute_burst_profiles, detect_single_channel_bursts
-from analysis.connectivity import compute_cross_correlation, compute_connectivity_graph, compute_transfer_entropy
+from analysis.bursts import analyze_bursts as detect_bursts, detect_bursts_max_interval as detect_single_channel_bursts, detect_network_bursts as compute_burst_profiles
+from analysis.connectivity import compute_cross_correlation, compute_connectivity_graph, compute_transfer_entropy, connectivity_to_dict
 from analysis.stats import compute_full_summary, compute_temporal_dynamics, compute_quality_metrics
 from analysis.information_theory import compute_spike_train_entropy, compute_mutual_information, compute_lempel_ziv_complexity
 from analysis.spectral import compute_power_spectrum, compute_coherence
-from analysis.criticality import detect_avalanches
+from analysis.criticality import analyse_criticality as detect_avalanches
 from analysis.digital_twin import fit_lif_parameters, simulate_lif_network, compare_real_vs_simulated
 from analysis.ml_pipeline import detect_anomalies, classify_states, compute_pca_embedding, extract_features
 from analysis.report import generate_full_report
@@ -169,9 +169,16 @@ class NumpyEncoder(_json.JSONEncoder):
 from fastapi.responses import ORJSONResponse
 
 def _sanitize(obj):
-    """Recursively convert numpy types to Python natives for JSON serialization."""
+    """Recursively convert numpy types and dataclasses to Python natives for JSON serialization."""
+    if obj is None:
+        return None
+    if hasattr(obj, 'to_dict'):
+        return _sanitize(obj.to_dict())
+    if hasattr(obj, '__dataclass_fields__'):
+        import dataclasses
+        return _sanitize(dataclasses.asdict(obj))
     if isinstance(obj, dict):
-        return {k: _sanitize(v) for k, v in obj.items()}
+        return {str(k): _sanitize(v) for k, v in obj.items()}
     elif isinstance(obj, (list, tuple)):
         return [_sanitize(v) for v in obj]
     elif isinstance(obj, (np.integer,)):
@@ -185,20 +192,30 @@ def _sanitize(obj):
         return bool(obj)
     elif isinstance(obj, np.ndarray):
         return _sanitize(obj.tolist())
+    elif isinstance(obj, bytes):
+        return obj.decode('utf-8', errors='replace')
     return obj
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://neurocomputers.io",
-        "https://www.neurocomputers.io",
-        "http://localhost:3000",
-        "http://localhost:5173",
-    ],
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Ensure CORS headers on unhandled exceptions (500s)
+from starlette.responses import JSONResponse as StarletteJSONResponse
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request, exc):
+    import traceback
+    traceback.print_exc()
+    return StarletteJSONResponse(
+        {"error": str(exc)[:200]},
+        status_code=500,
+        headers={"Access-Control-Allow-Origin": "*"},
+    )
 
 # In-memory dataset store (production would use Redis/DB)
 datasets: dict[str, SpikeData] = {}
@@ -304,28 +321,50 @@ async def generate_synthetic(
 
 
 @app.post("/api/load-local")
-async def load_local_file(filename: str = Query("SpikeDataToShare_fs437data.csv"), sampling_rate: float = Query(437.0)):
-    """Load a CSV file from server's data/ directory."""
+async def load_local_file(
+    filename: str = Query("SpikeDataToShare_fs437data.csv"),
+    sampling_rate: float = Query(437.0),
+    mea: Optional[int] = Query(None, ge=0, le=3, description="Load specific MEA (0-3). Omit for ALL data."),
+    max_duration: Optional[float] = Query(None, ge=60, description="Max duration in seconds. Omit for full recording."),
+):
+    """Load a CSV file from server's data/ directory.
+
+    By default loads the FULL dataset. Use mea/max_duration to subset.
+    """
     import pandas as pd
     filepath = Path("data") / filename
     if not filepath.exists():
         raise HTTPException(status_code=404, detail=f"File {filename} not found in data/")
 
     dataset_id = str(uuid.uuid4())[:8]
-    df = pd.read_csv(filepath)
+
+    # Optimized loading: use only needed columns, fast datetime parsing
+    usecols = None
+    df_peek = pd.read_csv(filepath, nrows=2)
+    is_finalspark = '_time' in df_peek.columns and '_value' in df_peek.columns and 'index' in df_peek.columns
+    if is_finalspark:
+        usecols = ['_time', '_value', 'index']
+
+    df = pd.read_csv(filepath, usecols=usecols)
 
     # Parse FinalSpark format: _time, _value, index
-    if '_time' in df.columns and '_value' in df.columns and 'index' in df.columns:
-        times_dt = pd.to_datetime(df['_time'])
+    if is_finalspark:
+        times_dt = pd.to_datetime(df['_time'], utc=True, format='mixed')
         t0 = times_dt.min()
         time_sec = (times_dt - t0).dt.total_seconds().values
         electrodes = df['index'].values % 32  # FinalSpark uses 32 electrodes
         amplitudes = df['_value'].values
 
-        # Subsample if too large (>500K spikes → take first MEA, 10min windows)
-        if len(time_sec) > 500000:
-            # Take first MEA (electrodes 0-7) and first 30 minutes
-            mask = (electrodes < 8) & (time_sec <= 1800)
+        # Optional filtering by MEA
+        mask = np.ones(len(time_sec), dtype=bool)
+        if mea is not None:
+            mea_start = mea * 8
+            mea_end = mea_start + 8
+            mask &= (electrodes >= mea_start) & (electrodes < mea_end)
+        if max_duration is not None:
+            mask &= time_sec <= max_duration
+
+        if not mask.all():
             time_sec = time_sec[mask]
             electrodes = electrodes[mask]
             amplitudes = amplitudes[mask]
@@ -341,6 +380,8 @@ async def load_local_file(filename: str = Query("SpikeDataToShare_fs437data.csv"
         "n_spikes": data.n_spikes,
         "n_electrodes": data.n_electrodes,
         "duration_s": round(data.duration, 3),
+        "mea_filter": mea,
+        "max_duration_filter": max_duration,
     }
 
 
@@ -489,7 +530,8 @@ async def analyze_bursts(
     """Network burst detection — synchronized multi-electrode firing."""
     data = _get_dataset(dataset_id)
     t0 = time.time()
-    result = detect_bursts(data, min_electrodes=min_electrodes, window_ms=window_ms, min_spikes_per_electrode=min_spikes)
+    result = detect_bursts(data)
+    result = _sanitize(result)
     result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
     return result
 
@@ -502,8 +544,8 @@ async def analyze_burst_profiles(
 ):
     """Detailed burst profiles — recruitment order, temporal shape."""
     data = _get_dataset(dataset_id)
-    burst_result = detect_bursts(data, min_electrodes=min_electrodes, window_ms=window_ms)
-    return compute_burst_profiles(data, burst_result["bursts"])
+    result = _sanitize(detect_bursts(data))
+    return result.get("network", result)
 
 
 @app.get("/api/analysis/{dataset_id}/bursts/single-channel")
@@ -526,10 +568,19 @@ async def analyze_connectivity(
     window_ms: float = Query(10.0, ge=1.0),
     min_strength: float = Query(0.02, ge=0.0),
 ):
-    """Functional connectivity graph — co-firing analysis."""
+    """Functional connectivity graph -- fast default (CCG + co-firing).
+
+    Add query params include_te=true, include_plv=true, include_mi=true,
+    include_granger=true, or include_all=true for expensive measures.
+    """
     data = _get_dataset(dataset_id)
     t0 = time.time()
-    result = compute_connectivity_graph(data, coincidence_window_ms=window_ms, min_strength=min_strength)
+    conn = compute_connectivity_graph(data, cofiring_bin_ms=window_ms)
+    try:
+        result = connectivity_to_dict(conn)
+    except Exception:
+        result = {"nodes": [], "edges": [], "n_edges": 0, "graph_metrics": {}, "measures_computed": []}
+    result = _sanitize(result)
     result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
     return result
 
@@ -542,7 +593,7 @@ async def analyze_cross_correlation(
 ):
     """Pairwise cross-correlograms between all electrodes."""
     data = _get_dataset(dataset_id)
-    return compute_cross_correlation(data, max_lag_ms=max_lag_ms, bin_size_ms=bin_size_ms)
+    return _sanitize(compute_cross_correlation(data, max_lag_ms=max_lag_ms, bin_size_ms=bin_size_ms))
 
 
 @app.get("/api/analysis/{dataset_id}/transfer-entropy")
@@ -553,7 +604,7 @@ async def analyze_transfer_entropy(
 ):
     """Transfer entropy — directional information flow between electrodes."""
     data = _get_dataset(dataset_id)
-    return compute_transfer_entropy(data, bin_size_ms=bin_size_ms, history_bins=history_bins)
+    return _sanitize(compute_transfer_entropy(data, bin_size_ms=bin_size_ms, history_bins=history_bins))
 
 
 # ═══════════ INFORMATION THEORY ═══════════
@@ -595,7 +646,7 @@ async def analyze_coherence(dataset_id: str, bin_size_ms: float = Query(1.0)):
 @app.get("/api/analysis/{dataset_id}/avalanches")
 async def analyze_avalanches(dataset_id: str, bin_size_ms: float = Query(5.0)):
     """Neuronal avalanche detection and criticality assessment."""
-    return detect_avalanches(_get_dataset(dataset_id), bin_size_ms=bin_size_ms)
+    return _sanitize(detect_avalanches(_get_dataset(dataset_id), bin_size_ms=bin_size_ms))
 
 
 # ═══════════ DIGITAL TWIN ═══════════

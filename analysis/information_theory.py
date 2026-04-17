@@ -212,10 +212,30 @@ def compute_lempel_ziv_complexity(
 
 
 def _lz76_complexity(s: str) -> int:
-    """Lempel-Ziv 1976 complexity — counts distinct substrings."""
+    """Lempel-Ziv 1976 complexity — counts distinct substrings.
+
+    Uses the incremental-parsing variant: scan left to right, extend current
+    word until it has not been seen in the *previous* portion of the string,
+    then start a new word.  Complexity = number of words.
+
+    For very long sequences (>50 000 chars) we subsample to keep runtime
+    bounded — the normalized complexity is a statistical property that
+    converges well on representative sub-sequences.
+    """
+    _LZ_MAX_LEN = 50_000
+
     n = len(s)
     if n == 0:
         return 0
+
+    # Subsample long strings: take evenly-spaced chunks and concatenate.
+    if n > _LZ_MAX_LEN:
+        # Take 10 equal-length chunks spread across the sequence
+        chunk = _LZ_MAX_LEN // 10
+        step = n // 10
+        parts = [s[i * step: i * step + chunk] for i in range(10)]
+        s = ''.join(parts)
+        n = len(s)
 
     c = 1
     i = 0

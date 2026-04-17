@@ -65,10 +65,10 @@ def predict_firing_rates(
 
 def predict_burst_probability(data: SpikeData, window_sec: float = 10.0) -> dict:
     """Estimate probability of burst in next window based on recent activity."""
-    from .bursts import detect_bursts
+    from .bursts import analyze_bursts
 
-    burst_result = detect_bursts(data)
-    bursts = burst_result.get("bursts", [])
+    burst_result = analyze_bursts(data)
+    bursts = burst_result.get("network", {}).get("bursts", burst_result.get("bursts", []))
 
     if len(bursts) < 2:
         return {"burst_probability": 0.1, "confidence": "low", "n_historical_bursts": len(bursts)}

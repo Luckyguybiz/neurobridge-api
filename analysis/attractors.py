@@ -58,6 +58,13 @@ def map_attractor_landscape(
     # Trajectory = sequence of state vectors
     trajectory = states_norm.T  # (n_bins, n_electrodes)
 
+    # Memory guard: downsample if trajectory is too large (> 5000 bins)
+    max_bins = 5000
+    if trajectory.shape[0] > max_bins:
+        step = trajectory.shape[0] // max_bins
+        trajectory = trajectory[::step]
+        n_bins = trajectory.shape[0]
+
     # Find recurrent states using distance-based clustering
     # State i is "near" state j if cosine distance < state_radius
     distances = cdist(trajectory, trajectory, metric='cosine')

@@ -44,17 +44,23 @@ def compute_stdp_matrix(
             if len(t_i) < 5 or len(t_j) < 5:
                 continue
 
-            # Compute all pairwise timing differences
-            diffs_ms = []
-            for ti in t_i:
-                valid = t_j[(t_j > ti - max_lag_sec) & (t_j < ti + max_lag_sec)]
-                for tj in valid:
-                    diffs_ms.append((tj - ti) * 1000)  # ms, positive = j fires after i
-
-            if len(diffs_ms) < 3:
+            # Vectorised pairwise timing differences using searchsorted.
+            # For each spike in t_i, find all spikes in t_j within the lag
+            # window and collect their time differences.
+            lo = np.searchsorted(t_j, t_i - max_lag_sec, side='left')
+            hi = np.searchsorted(t_j, t_i + max_lag_sec, side='right')
+            diffs_parts = []
+            for k_idx in range(len(t_i)):
+                if hi[k_idx] > lo[k_idx]:
+                    diffs_parts.append(
+                        (t_j[lo[k_idx]:hi[k_idx]] - t_i[k_idx]) * 1000.0
+                    )
+            if not diffs_parts:
                 continue
+            diffs = np.concatenate(diffs_parts)
 
-            diffs = np.array(diffs_ms)
+            if len(diffs) < 3:
+                continue
 
             # Histogram
             bins_edges = np.linspace(-max_lag_ms, max_lag_ms, n_bins + 1)
