@@ -104,16 +104,9 @@ PROTOCOLS = {
 }
 
 def list_protocols() -> dict:
-    """List all available protocols with metadata."""
+    """List all available protocols with full details including parameters."""
     return {
-        "protocols": {
-            name: {
-                "name": p["name"],
-                "description": p["description"],
-                "reference": p.get("reference", "NeuroBridge original"),
-            }
-            for name, p in PROTOCOLS.items()
-        },
+        "protocols": PROTOCOLS,
         "n_protocols": len(PROTOCOLS),
     }
 
