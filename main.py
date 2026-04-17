@@ -535,9 +535,10 @@ async def analyze_bursts(
     min_spikes: int = Query(2, ge=1),
 ):
     """Network burst detection — synchronized multi-electrode firing."""
+    import asyncio
     data, subsampled = _get_dataset_capped(dataset_id)
     t0 = time.time()
-    result = detect_bursts(data)
+    result = await asyncio.to_thread(detect_bursts, data)
     result = _sanitize(result)
     result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
     if subsampled:
@@ -583,9 +584,10 @@ async def analyze_connectivity(
     Add query params include_te=true, include_plv=true, include_mi=true,
     include_granger=true, or include_all=true for expensive measures.
     """
+    import asyncio
     data, subsampled = _get_dataset_capped(dataset_id)
     t0 = time.time()
-    conn = compute_connectivity_graph(data, cofiring_bin_ms=window_ms)
+    conn = await asyncio.to_thread(compute_connectivity_graph, data, window_ms)
     try:
         result = connectivity_to_dict(conn)
     except Exception:
@@ -605,8 +607,10 @@ async def analyze_cross_correlation(
     bin_size_ms: float = Query(1.0),
 ):
     """Pairwise cross-correlograms between all electrodes."""
+    import asyncio
     data, subsampled = _get_dataset_capped(dataset_id)
-    result = _sanitize(compute_cross_correlation(data, max_lag_ms=max_lag_ms, bin_size_ms=bin_size_ms))
+    raw = await asyncio.to_thread(compute_cross_correlation, data, max_lag_ms, bin_size_ms)
+    result = _sanitize(raw)
     if subsampled:
         result["_subsampled"] = True
     return result
@@ -619,8 +623,10 @@ async def analyze_transfer_entropy(
     history_bins: int = Query(5, ge=1, le=20),
 ):
     """Transfer entropy — directional information flow between electrodes."""
+    import asyncio
     data, subsampled = _get_dataset_capped(dataset_id)
-    result = _sanitize(compute_transfer_entropy(data, bin_size_ms=bin_size_ms, history_bins=history_bins))
+    raw = await asyncio.to_thread(compute_transfer_entropy, data, bin_size_ms, history_bins)
+    result = _sanitize(raw)
     if subsampled:
         result["_subsampled"] = True
     return result
@@ -870,8 +876,9 @@ async def analyze_multiscale(dataset_id: str):
 @app.get("/api/analysis/{dataset_id}/full-report")
 async def full_report(dataset_id: str):
     """Run ALL 21 analyses and generate comprehensive report."""
+    import asyncio
     data, subsampled = _get_dataset_capped(dataset_id)
-    report = generate_full_report(data)
+    report = await asyncio.to_thread(generate_full_report, data)
     report = _sanitize(report)
     if subsampled:
         report["_subsampled"] = True
@@ -1856,4 +1863,4 @@ def _get_dataset_capped(dataset_id: str, max_spikes: int = _MAX_SPIKES_HEAVY) ->
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8847)
+    uvicorn.run("main:app", host="0.0.0.0", port=8847, workers=2)
