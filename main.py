@@ -505,7 +505,10 @@ async def analyze_temporal(
 ):
     """Temporal dynamics — trends, stationarity, Fano factors."""
     data = _get_dataset(dataset_id)
-    return compute_temporal_dynamics(data, bin_size_sec=bin_size)
+    try:
+        return _sanitize(compute_temporal_dynamics(data, bin_size_sec=bin_size))
+    except Exception as e:
+        return {"error": str(e), "partial": True}
 
 
 @app.post("/api/analysis/{dataset_id}/spike-sorting")
@@ -798,7 +801,10 @@ async def analyze_emergence(dataset_id: str):
 @app.get("/api/analysis/{dataset_id}/attractors")
 async def analyze_attractors(dataset_id: str, min_visits: int = Query(3)):
     """Map attractor landscape — find memory traces as dynamical states."""
-    return _sanitize(map_attractor_landscape(_get_dataset(dataset_id), min_visits=min_visits))
+    try:
+        return _sanitize(map_attractor_landscape(_get_dataset(dataset_id), min_visits=min_visits))
+    except Exception as e:
+        return {"error": str(e), "partial": True}
 
 
 @app.get("/api/analysis/{dataset_id}/state-space")
@@ -828,7 +834,10 @@ async def analyze_weights(dataset_id: str):
 @app.get("/api/analysis/{dataset_id}/weight-tracking")
 async def analyze_weight_tracking(dataset_id: str, window_sec: float = Query(30.0)):
     """Track synaptic weight changes over time — watch learning happen."""
-    return _sanitize(track_weight_changes(_get_dataset(dataset_id), window_sec=window_sec))
+    try:
+        return _sanitize(track_weight_changes(_get_dataset(dataset_id), window_sec=window_sec))
+    except Exception as e:
+        return {"error": str(e), "partial": True}
 
 
 @app.get("/api/analysis/{dataset_id}/multiscale")
