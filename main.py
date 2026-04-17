@@ -504,9 +504,13 @@ async def analyze_temporal(
     bin_size: float = Query(60.0, ge=1.0, le=3600.0),
 ):
     """Temporal dynamics — trends, stationarity, Fano factors."""
-    data = _get_dataset(dataset_id)
+    data, subsampled = _get_dataset_capped(dataset_id, max_spikes=500_000)
     try:
-        return _sanitize(compute_temporal_dynamics(data, bin_size_sec=bin_size))
+        result = _sanitize(compute_temporal_dynamics(data, bin_size_sec=bin_size))
+        if subsampled:
+            result["_subsampled"] = True
+            result["_subsampled_spikes"] = data.n_spikes
+        return result
     except Exception as e:
         return {"error": str(e), "partial": True}
 
@@ -531,11 +535,14 @@ async def analyze_bursts(
     min_spikes: int = Query(2, ge=1),
 ):
     """Network burst detection — synchronized multi-electrode firing."""
-    data = _get_dataset(dataset_id)
+    data, subsampled = _get_dataset_capped(dataset_id)
     t0 = time.time()
     result = detect_bursts(data)
     result = _sanitize(result)
     result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
+    if subsampled:
+        result["_subsampled"] = True
+        result["_subsampled_spikes"] = data.n_spikes
     return result
 
 
@@ -546,7 +553,7 @@ async def analyze_burst_profiles(
     window_ms: float = Query(50.0),
 ):
     """Detailed burst profiles — recruitment order, temporal shape."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     result = _sanitize(detect_bursts(data))
     return result.get("network", result)
 
@@ -576,7 +583,7 @@ async def analyze_connectivity(
     Add query params include_te=true, include_plv=true, include_mi=true,
     include_granger=true, or include_all=true for expensive measures.
     """
-    data = _get_dataset(dataset_id)
+    data, subsampled = _get_dataset_capped(dataset_id)
     t0 = time.time()
     conn = compute_connectivity_graph(data, cofiring_bin_ms=window_ms)
     try:
@@ -585,6 +592,9 @@ async def analyze_connectivity(
         result = {"nodes": [], "edges": [], "n_edges": 0, "graph_metrics": {}, "measures_computed": []}
     result = _sanitize(result)
     result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
+    if subsampled:
+        result["_subsampled"] = True
+        result["_subsampled_spikes"] = data.n_spikes
     return result
 
 
@@ -595,8 +605,11 @@ async def analyze_cross_correlation(
     bin_size_ms: float = Query(1.0),
 ):
     """Pairwise cross-correlograms between all electrodes."""
-    data = _get_dataset(dataset_id)
-    return _sanitize(compute_cross_correlation(data, max_lag_ms=max_lag_ms, bin_size_ms=bin_size_ms))
+    data, subsampled = _get_dataset_capped(dataset_id)
+    result = _sanitize(compute_cross_correlation(data, max_lag_ms=max_lag_ms, bin_size_ms=bin_size_ms))
+    if subsampled:
+        result["_subsampled"] = True
+    return result
 
 
 @app.get("/api/analysis/{dataset_id}/transfer-entropy")
@@ -606,8 +619,11 @@ async def analyze_transfer_entropy(
     history_bins: int = Query(5, ge=1, le=20),
 ):
     """Transfer entropy — directional information flow between electrodes."""
-    data = _get_dataset(dataset_id)
-    return _sanitize(compute_transfer_entropy(data, bin_size_ms=bin_size_ms, history_bins=history_bins))
+    data, subsampled = _get_dataset_capped(dataset_id)
+    result = _sanitize(compute_transfer_entropy(data, bin_size_ms=bin_size_ms, history_bins=history_bins))
+    if subsampled:
+        result["_subsampled"] = True
+    return result
 
 
 # ═══════════ INFORMATION THEORY ═══════════
@@ -715,7 +731,8 @@ async def analyze_learning(dataset_id: str, window_sec: float = Query(60.0)):
 @app.get("/api/analysis/{dataset_id}/iq")
 async def analyze_iq(dataset_id: str):
     """Organoid Intelligence Quotient — composite computational capacity score."""
-    return _sanitize(compute_organoid_iq(_get_dataset(dataset_id)))
+    data, _ = _get_dataset_capped(dataset_id)
+    return _sanitize(compute_organoid_iq(data))
 
 
 # ═══════════ PREDICTIONS ═══════════
@@ -735,7 +752,8 @@ async def predict_bursts(dataset_id: str, window_sec: float = Query(10.0)):
 @app.get("/api/analysis/{dataset_id}/health")
 async def analyze_health(dataset_id: str):
     """Estimate organoid health and viability."""
-    return _sanitize(estimate_organoid_health(_get_dataset(dataset_id)))
+    data, _ = _get_dataset_capped(dataset_id)
+    return _sanitize(estimate_organoid_health(data))
 
 
 # ═══════════ NEURAL REPLAY ═══════════
@@ -793,7 +811,8 @@ async def analyze_rhythms(dataset_id: str):
 @app.get("/api/analysis/{dataset_id}/emergence")
 async def analyze_emergence(dataset_id: str):
     """Compute integrated information (Phi) and causal emergence."""
-    return _sanitize(compute_integrated_information(_get_dataset(dataset_id)))
+    data, _ = _get_dataset_capped(dataset_id)
+    return _sanitize(compute_integrated_information(data))
 
 
 # ═══════════ BREAKTHROUGH MODULES ═══════════
@@ -851,9 +870,13 @@ async def analyze_multiscale(dataset_id: str):
 @app.get("/api/analysis/{dataset_id}/full-report")
 async def full_report(dataset_id: str):
     """Run ALL 21 analyses and generate comprehensive report."""
-    data = _get_dataset(dataset_id)
+    data, subsampled = _get_dataset_capped(dataset_id)
     report = generate_full_report(data)
-    return _sanitize(report)
+    report = _sanitize(report)
+    if subsampled:
+        report["_subsampled"] = True
+        report["_subsampled_spikes"] = data.n_spikes
+    return report
 
 
 # ═══════════ DISCOVERY ANALYSIS ═══════════
@@ -1810,6 +1833,25 @@ def _get_dataset(dataset_id: str) -> SpikeData:
     if dataset_id not in datasets:
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found. Upload data first via POST /api/upload")
     return datasets[dataset_id]
+
+
+# Auto-subsample for heavy endpoints: cap at MAX_SPIKES for O(N²) analyses
+_MAX_SPIKES_HEAVY = 200_000  # ~200K spikes = fast enough for burst/connectivity/temporal
+
+def _get_dataset_capped(dataset_id: str, max_spikes: int = _MAX_SPIKES_HEAVY) -> tuple[SpikeData, bool]:
+    """Get dataset, auto-subsampling if too large for heavy analysis.
+    Returns (data, was_subsampled).
+    Uses time-range subsetting to preserve temporal structure (not random sampling)."""
+    data = _get_dataset(dataset_id)
+    if data.n_spikes <= max_spikes:
+        return data, False
+    # Find time cutoff that gives approximately max_spikes
+    # Estimate: rate = n_spikes / duration, target_duration = max_spikes / rate
+    rate = data.n_spikes / max(data.duration, 1)
+    target_duration = max_spikes / max(rate, 0.001)
+    t_start = data.time_range[0]
+    subset = data.get_time_range(t_start, t_start + target_duration)
+    return subset, True
 
 
 if __name__ == "__main__":
