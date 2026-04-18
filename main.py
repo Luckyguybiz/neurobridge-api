@@ -283,6 +283,15 @@ async def global_exception_handler(request, exc):
 datasets: dict[str, SpikeData] = {}
 _MAX_DATASETS = 2  # Auto-evict oldest when exceeded (OOM protection)
 
+# Semaphore: max 1 heavy computation at a time (prevents 100% CPU lockup)
+import asyncio as _asyncio
+_compute_semaphore = _asyncio.Semaphore(1)
+
+async def _run_heavy(func, *args):
+    """Run CPU-heavy function with semaphore — only 1 at a time."""
+    async with _compute_semaphore:
+        return await _asyncio.to_thread(func, *args)
+
 def _store_dataset(dataset_id: str, data: SpikeData) -> None:
     """Store dataset with auto-eviction to prevent OOM."""
     while len(datasets) >= _MAX_DATASETS:
@@ -434,7 +443,7 @@ async def load_local_file(
         }
 
     # Parse from disk in thread pool (don't block event loop)
-    data = await asyncio.to_thread(_parse_local_file, filename, sampling_rate, mea, max_duration)
+    data = await _run_heavy(_parse_local_file, filename, sampling_rate, mea, max_duration)
     _local_file_cache[cache_key] = data
     _store_dataset(dataset_id, data)
 
@@ -566,7 +575,7 @@ async def analyze_summary(dataset_id: str):
     import asyncio
     data = _get_dataset(dataset_id)
     t0 = time.time()
-    result = await asyncio.to_thread(compute_full_summary, data)
+    result = await _run_heavy(compute_full_summary, data)
     result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
     return result
 
@@ -586,7 +595,7 @@ async def analyze_firing_rates(
     """Compute time-binned firing rates per electrode."""
     import asyncio
     data, subsampled = _get_dataset_capped(dataset_id, max_spikes=500_000)
-    result = await asyncio.to_thread(compute_firing_rates, data, bin_size_sec=bin_size)
+    result = await _run_heavy(compute_firing_rates, data, bin_size_sec=bin_size)
     result = _sanitize(result)
     if subsampled:
         result["_subsampled"] = True
@@ -651,7 +660,7 @@ async def analyze_bursts(
     import asyncio
     data, subsampled = _get_dataset_capped(dataset_id, max_spikes=30_000)
     t0 = time.time()
-    result = await asyncio.to_thread(detect_bursts, data)
+    result = await _run_heavy(detect_bursts, data)
     result = _sanitize(result)
     result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
     if subsampled:
@@ -700,7 +709,7 @@ async def analyze_connectivity(
     import asyncio
     data, subsampled = _get_dataset_capped(dataset_id, max_spikes=10_000)
     t0 = time.time()
-    conn = await asyncio.to_thread(compute_connectivity_graph, data, window_ms)
+    conn = await _run_heavy(compute_connectivity_graph, data, window_ms)
     try:
         result = connectivity_to_dict(conn)
     except Exception:
@@ -722,7 +731,7 @@ async def analyze_cross_correlation(
     """Pairwise cross-correlograms between all electrodes."""
     import asyncio
     data, subsampled = _get_dataset_capped(dataset_id, max_spikes=10_000)
-    raw = await asyncio.to_thread(compute_cross_correlation, data, max_lag_ms, bin_size_ms)
+    raw = await _run_heavy(compute_cross_correlation, data, max_lag_ms, bin_size_ms)
     result = _sanitize(raw)
     if subsampled:
         result["_subsampled"] = True
@@ -738,7 +747,7 @@ async def analyze_transfer_entropy(
     """Transfer entropy — directional information flow between electrodes."""
     import asyncio
     data, subsampled = _get_dataset_capped(dataset_id, max_spikes=30_000)
-    raw = await asyncio.to_thread(compute_transfer_entropy, data, bin_size_ms, history_bins)
+    raw = await _run_heavy(compute_transfer_entropy, data, bin_size_ms, history_bins)
     result = _sanitize(raw)
     if subsampled:
         result["_subsampled"] = True
@@ -852,7 +861,7 @@ async def analyze_iq(dataset_id: str):
     """Organoid Intelligence Quotient — composite computational capacity score."""
     import asyncio
     data, _ = _get_dataset_capped(dataset_id)
-    return _sanitize(await asyncio.to_thread(compute_organoid_iq, data))
+    return _sanitize(await _run_heavy(compute_organoid_iq, data))
 
 
 # ═══════════ PREDICTIONS ═══════════
@@ -874,7 +883,7 @@ async def analyze_health(dataset_id: str):
     """Estimate organoid health and viability."""
     import asyncio
     data, _ = _get_dataset_capped(dataset_id)
-    return _sanitize(await asyncio.to_thread(estimate_organoid_health, data))
+    return _sanitize(await _run_heavy(estimate_organoid_health, data))
 
 
 # ═══════════ NEURAL REPLAY ═══════════
@@ -934,7 +943,7 @@ async def analyze_emergence(dataset_id: str):
     """Compute integrated information (Phi) and causal emergence."""
     import asyncio
     data, _ = _get_dataset_capped(dataset_id, max_spikes=20_000)  # IIT Phi is O(2^N), needs small dataset
-    return _sanitize(await asyncio.to_thread(compute_integrated_information, data))
+    return _sanitize(await _run_heavy(compute_integrated_information, data))
 
 
 # ═══════════ BREAKTHROUGH MODULES ═══════════
@@ -994,7 +1003,7 @@ async def full_report(dataset_id: str):
     """Run ALL 21 analyses and generate comprehensive report."""
     import asyncio
     data, subsampled = _get_dataset_capped(dataset_id)
-    report = await asyncio.to_thread(generate_full_report, data)
+    report = await _run_heavy(generate_full_report, data)
     report = _sanitize(report)
     if subsampled:
         report["_subsampled"] = True
