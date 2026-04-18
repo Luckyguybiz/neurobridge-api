@@ -285,11 +285,10 @@ _MAX_DATASETS = 2  # Auto-evict oldest when exceeded (OOM protection)
 
 def _store_dataset(dataset_id: str, data: SpikeData) -> None:
     """Store dataset with auto-eviction to prevent OOM."""
-    # Evict oldest datasets if at capacity
     while len(datasets) >= _MAX_DATASETS:
         oldest_id = next(iter(datasets))
         del datasets[oldest_id]
-    _store_dataset(dataset_id, data)
+    datasets[dataset_id] = data
 
 
 # ═══════════ HEALTH ═══════════
