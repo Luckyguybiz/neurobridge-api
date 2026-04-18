@@ -488,16 +488,7 @@ def _parse_local_file(filename: str, sampling_rate: float, mea: Optional[int], m
     else:
         data = load_file(str(filepath), sampling_rate=sampling_rate)
 
-    _store_dataset(dataset_id, data)
-    return {
-        "dataset_id": dataset_id,
-        "filename": filename,
-        "n_spikes": data.n_spikes,
-        "n_electrodes": data.n_electrodes,
-        "duration_s": round(data.duration, 3),
-        "mea_filter": mea,
-        "max_duration_filter": max_duration,
-    }
+    return data
 
 
 @app.get("/api/local-files")
