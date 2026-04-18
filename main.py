@@ -536,9 +536,10 @@ async def get_spikes(
 @app.get("/api/analysis/{dataset_id}/summary")
 async def analyze_summary(dataset_id: str):
     """Full dataset summary — per-electrode stats, population metrics, quality."""
+    import asyncio
     data = _get_dataset(dataset_id)
     t0 = time.time()
-    result = compute_full_summary(data)
+    result = await asyncio.to_thread(compute_full_summary, data)
     result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
     return result
 
@@ -822,8 +823,9 @@ async def analyze_learning(dataset_id: str, window_sec: float = Query(60.0)):
 @app.get("/api/analysis/{dataset_id}/iq")
 async def analyze_iq(dataset_id: str):
     """Organoid Intelligence Quotient — composite computational capacity score."""
+    import asyncio
     data, _ = _get_dataset_capped(dataset_id)
-    return _sanitize(compute_organoid_iq(data))
+    return _sanitize(await asyncio.to_thread(compute_organoid_iq, data))
 
 
 # ═══════════ PREDICTIONS ═══════════
@@ -843,8 +845,9 @@ async def predict_bursts(dataset_id: str, window_sec: float = Query(10.0)):
 @app.get("/api/analysis/{dataset_id}/health")
 async def analyze_health(dataset_id: str):
     """Estimate organoid health and viability."""
+    import asyncio
     data, _ = _get_dataset_capped(dataset_id)
-    return _sanitize(estimate_organoid_health(data))
+    return _sanitize(await asyncio.to_thread(estimate_organoid_health, data))
 
 
 # ═══════════ NEURAL REPLAY ═══════════
@@ -902,8 +905,9 @@ async def analyze_rhythms(dataset_id: str):
 @app.get("/api/analysis/{dataset_id}/emergence")
 async def analyze_emergence(dataset_id: str):
     """Compute integrated information (Phi) and causal emergence."""
+    import asyncio
     data, _ = _get_dataset_capped(dataset_id)
-    return _sanitize(compute_integrated_information(data))
+    return _sanitize(await asyncio.to_thread(compute_integrated_information, data))
 
 
 # ═══════════ BREAKTHROUGH MODULES ═══════════
