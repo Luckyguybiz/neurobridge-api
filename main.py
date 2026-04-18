@@ -219,13 +219,31 @@ async def global_exception_handler(request, exc):
 
 # In-memory dataset store (production would use Redis/DB)
 datasets: dict[str, SpikeData] = {}
+_MAX_DATASETS = 2  # Auto-evict oldest when exceeded (OOM protection)
+
+def _store_dataset(dataset_id: str, data: SpikeData) -> None:
+    """Store dataset with auto-eviction to prevent OOM."""
+    # Evict oldest datasets if at capacity
+    while len(datasets) >= _MAX_DATASETS:
+        oldest_id = next(iter(datasets))
+        del datasets[oldest_id]
+    _store_dataset(dataset_id, data)
 
 
 # ═══════════ HEALTH ═══════════
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "datasets_loaded": len(datasets), "timestamp": datetime.now(timezone.utc).isoformat()}
+    import psutil
+    mem = psutil.virtual_memory()
+    return {
+        "status": "ok",
+        "datasets_loaded": len(datasets),
+        "max_datasets": _MAX_DATASETS,
+        "memory_used_mb": round(mem.used / 1024 / 1024),
+        "memory_available_mb": round(mem.available / 1024 / 1024),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 # ═══════════ DATA MANAGEMENT ═══════════
@@ -248,7 +266,7 @@ async def upload_dataset(
         data = load_file(str(filepath), sampling_rate=sampling_rate)
         load_time = (time.time() - t0) * 1000
 
-        datasets[dataset_id] = data
+        _store_dataset(dataset_id, data)
 
         return {
             "dataset_id": dataset_id,
@@ -310,7 +328,7 @@ async def generate_synthetic(
         sampling_rate=30000.0,
         metadata={"source": "synthetic", "duration": duration, "n_electrodes": n_electrodes},
     )
-    datasets[dataset_id] = data
+    _store_dataset(dataset_id, data)
 
     return {
         "dataset_id": dataset_id,
@@ -373,7 +391,7 @@ async def load_local_file(
     else:
         data = load_file(str(filepath), sampling_rate=sampling_rate)
 
-    datasets[dataset_id] = data
+    _store_dataset(dataset_id, data)
     return {
         "dataset_id": dataset_id,
         "filename": filename,
