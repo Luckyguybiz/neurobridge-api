@@ -906,7 +906,7 @@ async def analyze_rhythms(dataset_id: str):
 async def analyze_emergence(dataset_id: str):
     """Compute integrated information (Phi) and causal emergence."""
     import asyncio
-    data, _ = _get_dataset_capped(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id, max_spikes=20_000)  # IIT Phi is O(2^N), needs small dataset
     return _sanitize(await asyncio.to_thread(compute_integrated_information, data))
 
 
@@ -1932,7 +1932,7 @@ def _get_dataset(dataset_id: str) -> SpikeData:
 
 
 # Auto-subsample for heavy endpoints: cap at MAX_SPIKES for O(N²) analyses
-_MAX_SPIKES_HEAVY = 200_000  # ~200K spikes = fast enough for burst/connectivity/temporal
+_MAX_SPIKES_HEAVY = 50_000  # ~50K spikes — keeps O(N²) endpoints under 30s on VPS
 
 def _get_dataset_capped(dataset_id: str, max_spikes: int = _MAX_SPIKES_HEAVY) -> tuple[SpikeData, bool]:
     """Get dataset, auto-subsampling if too large for heavy analysis.
