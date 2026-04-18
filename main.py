@@ -622,7 +622,7 @@ async def analyze_bursts(
 ):
     """Network burst detection — synchronized multi-electrode firing."""
     import asyncio
-    data, subsampled = _get_dataset_capped(dataset_id)
+    data, subsampled = _get_dataset_capped(dataset_id, max_spikes=30_000)
     t0 = time.time()
     result = await asyncio.to_thread(detect_bursts, data)
     result = _sanitize(result)
@@ -671,7 +671,7 @@ async def analyze_connectivity(
     include_granger=true, or include_all=true for expensive measures.
     """
     import asyncio
-    data, subsampled = _get_dataset_capped(dataset_id)
+    data, subsampled = _get_dataset_capped(dataset_id, max_spikes=30_000)
     t0 = time.time()
     conn = await asyncio.to_thread(compute_connectivity_graph, data, window_ms)
     try:
@@ -694,7 +694,7 @@ async def analyze_cross_correlation(
 ):
     """Pairwise cross-correlograms between all electrodes."""
     import asyncio
-    data, subsampled = _get_dataset_capped(dataset_id)
+    data, subsampled = _get_dataset_capped(dataset_id, max_spikes=30_000)
     raw = await asyncio.to_thread(compute_cross_correlation, data, max_lag_ms, bin_size_ms)
     result = _sanitize(raw)
     if subsampled:
@@ -710,7 +710,7 @@ async def analyze_transfer_entropy(
 ):
     """Transfer entropy — directional information flow between electrodes."""
     import asyncio
-    data, subsampled = _get_dataset_capped(dataset_id)
+    data, subsampled = _get_dataset_capped(dataset_id, max_spikes=30_000)
     raw = await asyncio.to_thread(compute_transfer_entropy, data, bin_size_ms, history_bins)
     result = _sanitize(raw)
     if subsampled:
