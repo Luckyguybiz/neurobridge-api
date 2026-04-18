@@ -671,7 +671,7 @@ async def analyze_connectivity(
     include_granger=true, or include_all=true for expensive measures.
     """
     import asyncio
-    data, subsampled = _get_dataset_capped(dataset_id, max_spikes=30_000)
+    data, subsampled = _get_dataset_capped(dataset_id, max_spikes=10_000)
     t0 = time.time()
     conn = await asyncio.to_thread(compute_connectivity_graph, data, window_ms)
     try:
@@ -694,7 +694,7 @@ async def analyze_cross_correlation(
 ):
     """Pairwise cross-correlograms between all electrodes."""
     import asyncio
-    data, subsampled = _get_dataset_capped(dataset_id, max_spikes=30_000)
+    data, subsampled = _get_dataset_capped(dataset_id, max_spikes=10_000)
     raw = await asyncio.to_thread(compute_cross_correlation, data, max_lag_ms, bin_size_ms)
     result = _sanitize(raw)
     if subsampled:
