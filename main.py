@@ -399,6 +399,9 @@ async def generate_synthetic(
     }
 
 
+# Cache for parsed local files — avoid re-reading 129MB CSV every click
+_local_file_cache: dict[str, SpikeData] = {}
+
 @app.post("/api/load-local")
 async def load_local_file(
     filename: str = Query("SpikeDataToShare_fs437data.csv"),
@@ -408,16 +411,51 @@ async def load_local_file(
 ):
     """Load a CSV file from server's data/ directory.
 
-    By default loads the FULL dataset. Use mea/max_duration to subset.
+    Caches parsed data so repeated loads are instant (~0ms vs ~10s).
     """
+    import asyncio
+
+    cache_key = f"{filename}:{mea}:{max_duration}"
+    dataset_id = str(uuid.uuid4())[:8]
+
+    # Check cache first
+    if cache_key in _local_file_cache:
+        data = _local_file_cache[cache_key]
+        _store_dataset(dataset_id, data)
+        return {
+            "dataset_id": dataset_id,
+            "filename": filename,
+            "n_spikes": data.n_spikes,
+            "n_electrodes": data.n_electrodes,
+            "duration_s": round(data.duration, 3),
+            "mea_filter": mea,
+            "max_duration_filter": max_duration,
+            "_cached": True,
+        }
+
+    # Parse from disk in thread pool (don't block event loop)
+    data = await asyncio.to_thread(_parse_local_file, filename, sampling_rate, mea, max_duration)
+    _local_file_cache[cache_key] = data
+    _store_dataset(dataset_id, data)
+
+    return {
+        "dataset_id": dataset_id,
+        "filename": filename,
+        "n_spikes": data.n_spikes,
+        "n_electrodes": data.n_electrodes,
+        "duration_s": round(data.duration, 3),
+        "mea_filter": mea,
+        "max_duration_filter": max_duration,
+    }
+
+
+def _parse_local_file(filename: str, sampling_rate: float, mea: Optional[int], max_duration: Optional[float]) -> SpikeData:
+    """Parse CSV file — runs in thread pool."""
     import pandas as pd
     filepath = Path("data") / filename
     if not filepath.exists():
         raise HTTPException(status_code=404, detail=f"File {filename} not found in data/")
 
-    dataset_id = str(uuid.uuid4())[:8]
-
-    # Optimized loading: use only needed columns, fast datetime parsing
     usecols = None
     df_peek = pd.read_csv(filepath, nrows=2)
     is_finalspark = '_time' in df_peek.columns and '_value' in df_peek.columns and 'index' in df_peek.columns
@@ -426,15 +464,13 @@ async def load_local_file(
 
     df = pd.read_csv(filepath, usecols=usecols)
 
-    # Parse FinalSpark format: _time, _value, index
     if is_finalspark:
         times_dt = pd.to_datetime(df['_time'], utc=True, format='mixed')
         t0 = times_dt.min()
         time_sec = (times_dt - t0).dt.total_seconds().values
-        electrodes = df['index'].values % 32  # FinalSpark uses 32 electrodes
+        electrodes = df['index'].values % 32
         amplitudes = df['_value'].values
 
-        # Optional filtering by MEA
         mask = np.ones(len(time_sec), dtype=bool)
         if mea is not None:
             mea_start = mea * 8
