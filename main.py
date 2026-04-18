@@ -204,6 +204,68 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ═══════════ RATE LIMITING ═══════════
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import JSONResponse as _RateLimitResponse
+import threading as _rl_threading
+
+_RATE_LIMIT_REGULAR = 60       # requests per minute for regular endpoints
+_RATE_LIMIT_HEAVY = 5          # requests per minute for heavy endpoints
+_HEAVY_ENDPOINTS = {"bursts", "connectivity", "cross-correlation", "transfer-entropy", "full-report"}
+_rate_buckets: dict[str, list[float]] = {}   # key -> list of timestamps
+_rate_lock = _rl_threading.Lock()
+
+
+def _is_heavy_endpoint(path: str) -> bool:
+    """Check if the request path matches a heavy analysis endpoint."""
+    parts = path.rstrip("/").split("/")
+    # Pattern: /api/analysis/{dataset_id}/{endpoint}
+    if len(parts) >= 5 and parts[1] == "api" and parts[2] == "analysis":
+        return parts[4] in _HEAVY_ENDPOINTS
+    return False
+
+
+def _check_rate_limit(key: str, limit: int) -> bool:
+    """Return True if request is allowed, False if rate-limited."""
+    now = time.time()
+    with _rate_lock:
+        timestamps = _rate_buckets.get(key)
+        if timestamps is None:
+            _rate_buckets[key] = [now]
+            return True
+        # Purge entries older than 60 seconds
+        cutoff = now - 60.0
+        _rate_buckets[key] = timestamps = [t for t in timestamps if t > cutoff]
+        if len(timestamps) >= limit:
+            return False
+        timestamps.append(now)
+        return True
+
+
+class RateLimitMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        # Skip non-API and OPTIONS requests
+        path = request.url.path
+        if not path.startswith("/api/") or request.method == "OPTIONS":
+            return await call_next(request)
+
+        client_ip = request.client.host if request.client else "unknown"
+        heavy = _is_heavy_endpoint(path)
+        limit = _RATE_LIMIT_HEAVY if heavy else _RATE_LIMIT_REGULAR
+        bucket_key = f"{client_ip}:{'heavy' if heavy else 'regular'}"
+
+        if not _check_rate_limit(bucket_key, limit):
+            return _RateLimitResponse(
+                {"error": f"Rate limit exceeded. Max {limit} requests per minute for {'heavy analysis' if heavy else 'regular'} endpoints. Please wait and try again."},
+                status_code=429,
+                headers={"Access-Control-Allow-Origin": "*", "Retry-After": "60"},
+            )
+        return await call_next(request)
+
+
+app.add_middleware(RateLimitMiddleware)
+
 # Ensure CORS headers on unhandled exceptions (500s)
 from starlette.responses import JSONResponse as StarletteJSONResponse
 
@@ -495,8 +557,14 @@ async def analyze_firing_rates(
     bin_size: float = Query(1.0, ge=0.1, le=60.0, description="Bin size in seconds"),
 ):
     """Compute time-binned firing rates per electrode."""
-    data = _get_dataset(dataset_id)
-    return compute_firing_rates(data, bin_size_sec=bin_size)
+    import asyncio
+    data, subsampled = _get_dataset_capped(dataset_id, max_spikes=500_000)
+    result = await asyncio.to_thread(compute_firing_rates, data, bin_size_sec=bin_size)
+    result = _sanitize(result)
+    if subsampled:
+        result["_subsampled"] = True
+        result["_subsampled_spikes"] = data.n_spikes
+    return result
 
 
 @app.get("/api/analysis/{dataset_id}/isi")
