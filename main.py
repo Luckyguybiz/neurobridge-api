@@ -287,10 +287,10 @@ _MAX_DATASETS = 2  # Auto-evict oldest when exceeded (OOM protection)
 import asyncio as _asyncio
 _compute_semaphore = _asyncio.Semaphore(1)
 
-async def _run_heavy(func, *args):
+async def _run_heavy(func, *args, **kwargs):
     """Run CPU-heavy function with semaphore — only 1 at a time."""
     async with _compute_semaphore:
-        return await _asyncio.to_thread(func, *args)
+        return await _asyncio.to_thread(func, *args, **kwargs)
 
 def _store_dataset(dataset_id: str, data: SpikeData) -> None:
     """Store dataset with auto-eviction to prevent OOM."""
