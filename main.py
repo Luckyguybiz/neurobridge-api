@@ -891,13 +891,13 @@ async def analyze_health(dataset_id: str):
 @app.get("/api/analysis/{dataset_id}/replay")
 async def analyze_replay(dataset_id: str, min_similarity: float = Query(0.3)):
     """Detect neural replay — memory consolidation signatures."""
-    return _sanitize(detect_replay(_get_dataset(dataset_id), min_similarity=min_similarity))
+    return _sanitize(await _run_heavy(detect_replay, _get_dataset(dataset_id), min_similarity=min_similarity))
 
 
 @app.get("/api/analysis/{dataset_id}/sequences")
 async def analyze_sequences(dataset_id: str, min_length: int = Query(3)):
     """Detect repeated neural sequences — functional circuits."""
-    return _sanitize(detect_sequence_replay(_get_dataset(dataset_id), min_sequence_length=min_length))
+    return _sanitize(await _run_heavy(detect_sequence_replay, _get_dataset(dataset_id), min_sequence_length=min_length))
 
 
 # ═══════════ RESERVOIR COMPUTING ═══════════
@@ -905,13 +905,13 @@ async def analyze_sequences(dataset_id: str, min_length: int = Query(3)):
 @app.get("/api/analysis/{dataset_id}/memory-capacity")
 async def analyze_memory_capacity(dataset_id: str, max_delay: int = Query(20)):
     """Estimate memory capacity of neural network as reservoir computer."""
-    return _sanitize(estimate_memory_capacity(_get_dataset(dataset_id), max_delay=max_delay))
+    return _sanitize(await _run_heavy(estimate_memory_capacity, _get_dataset(dataset_id), max_delay=max_delay))
 
 
 @app.get("/api/analysis/{dataset_id}/nonlinearity")
 async def analyze_nonlinearity(dataset_id: str):
     """Benchmark nonlinear computational capability."""
-    return _sanitize(benchmark_nonlinear_computation(_get_dataset(dataset_id)))
+    return _sanitize(await _run_heavy(benchmark_nonlinear_computation, _get_dataset(dataset_id)))
 
 
 # ═══════════ FINGERPRINTING ═══════════
@@ -919,7 +919,7 @@ async def analyze_nonlinearity(dataset_id: str):
 @app.get("/api/analysis/{dataset_id}/fingerprint")
 async def analyze_fingerprint(dataset_id: str):
     """Compute unique organoid fingerprint — identity signature."""
-    return _sanitize(compute_fingerprint(_get_dataset(dataset_id)))
+    return _sanitize(await _run_heavy(compute_fingerprint, _get_dataset(dataset_id)))
 
 
 # ═══════════ SONIFICATION ═══════════
@@ -927,13 +927,13 @@ async def analyze_fingerprint(dataset_id: str):
 @app.get("/api/analysis/{dataset_id}/sonify")
 async def sonify(dataset_id: str, speed: float = Query(10.0), duration: Optional[float] = None):
     """Convert neural activity to audio WAV (base64 encoded)."""
-    return _sanitize(generate_sonification(_get_dataset(dataset_id), speed_factor=speed, duration_sec=duration))
+    return _sanitize(await _run_heavy(generate_sonification, _get_dataset(dataset_id), speed_factor=speed, duration_sec=duration))
 
 
 @app.get("/api/analysis/{dataset_id}/rhythms")
 async def analyze_rhythms(dataset_id: str):
     """Analyze rhythmic structure of neural activity."""
-    return _sanitize(compute_rhythmic_analysis(_get_dataset(dataset_id)))
+    return _sanitize(await _run_heavy(compute_rhythmic_analysis, _get_dataset(dataset_id)))
 
 
 # ═══════════ CAUSAL EMERGENCE ═══════════
@@ -952,7 +952,7 @@ async def analyze_emergence(dataset_id: str):
 async def analyze_attractors(dataset_id: str, min_visits: int = Query(3)):
     """Map attractor landscape — find memory traces as dynamical states."""
     try:
-        return _sanitize(map_attractor_landscape(_get_dataset(dataset_id), min_visits=min_visits))
+        return _sanitize(await _run_heavy(map_attractor_landscape, _get_dataset(dataset_id), min_visits=min_visits))
     except Exception as e:
         return {"error": str(e), "partial": True}
 
@@ -960,32 +960,32 @@ async def analyze_attractors(dataset_id: str, min_visits: int = Query(3)):
 @app.get("/api/analysis/{dataset_id}/state-space")
 async def analyze_state_space(dataset_id: str):
     """Analyze geometry of neural state space."""
-    return _sanitize(compute_state_space_geometry(_get_dataset(dataset_id)))
+    return _sanitize(await _run_heavy(compute_state_space_geometry, _get_dataset(dataset_id)))
 
 
 @app.get("/api/analysis/{dataset_id}/phase-transitions")
 async def analyze_phase_transitions(dataset_id: str, window_sec: float = Query(5.0)):
     """Detect phase transitions — moments of neural reorganization."""
-    return _sanitize(detect_phase_transitions(_get_dataset(dataset_id), window_sec=window_sec))
+    return _sanitize(await _run_heavy(detect_phase_transitions, _get_dataset(dataset_id), window_sec=window_sec))
 
 
 @app.get("/api/analysis/{dataset_id}/predictive-coding")
 async def analyze_predictive_coding(dataset_id: str):
     """Measure predictive coding — does the organoid generate predictions?"""
-    return _sanitize(measure_predictive_coding(_get_dataset(dataset_id)))
+    return _sanitize(await _run_heavy(measure_predictive_coding, _get_dataset(dataset_id)))
 
 
 @app.get("/api/analysis/{dataset_id}/weights")
 async def analyze_weights(dataset_id: str):
     """Infer synaptic weight matrix from spike timing."""
-    return _sanitize(infer_synaptic_weights(_get_dataset(dataset_id)))
+    return _sanitize(await _run_heavy(infer_synaptic_weights, _get_dataset(dataset_id)))
 
 
 @app.get("/api/analysis/{dataset_id}/weight-tracking")
 async def analyze_weight_tracking(dataset_id: str, window_sec: float = Query(30.0)):
     """Track synaptic weight changes over time — watch learning happen."""
     try:
-        return _sanitize(track_weight_changes(_get_dataset(dataset_id), window_sec=window_sec))
+        return _sanitize(await _run_heavy(track_weight_changes, _get_dataset(dataset_id), window_sec=window_sec))
     except Exception as e:
         return {"error": str(e), "partial": True}
 
@@ -993,7 +993,7 @@ async def analyze_weight_tracking(dataset_id: str, window_sec: float = Query(30.
 @app.get("/api/analysis/{dataset_id}/multiscale")
 async def analyze_multiscale(dataset_id: str):
     """Multi-timescale complexity analysis — find operating frequency."""
-    return _sanitize(compute_multiscale_complexity(_get_dataset(dataset_id)))
+    return _sanitize(await _run_heavy(compute_multiscale_complexity, _get_dataset(dataset_id)))
 
 
 # ═══════════ FULL REPORT ═══════════
@@ -1018,7 +1018,7 @@ async def api_sleep_wake(dataset_id: str):
     """Detect sleep-wake-like cycles in organoid activity."""
     data = _get_dataset(dataset_id)
     t0 = time.time()
-    result = analyze_sleep_wake(data)
+    result = await _run_heavy(analyze_sleep_wake, data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
     return _sanitize(result)
 
@@ -1028,7 +1028,7 @@ async def api_habituation(dataset_id: str):
     """Detect habituation — response decay to repeated patterns."""
     data = _get_dataset(dataset_id)
     t0 = time.time()
-    result = detect_repeated_patterns(data)
+    result = await _run_heavy(detect_repeated_patterns, data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
     return _sanitize(result)
 
@@ -1038,7 +1038,7 @@ async def api_metastability(dataset_id: str):
     """Analyze metastability — brain-like state switching dynamics."""
     data = _get_dataset(dataset_id)
     t0 = time.time()
-    result = analyze_metastability(data)
+    result = await _run_heavy(analyze_metastability, data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
     return _sanitize(result)
 
@@ -1048,7 +1048,7 @@ async def api_information_flow(dataset_id: str):
     """Map directed information flow using Granger causality."""
     data = _get_dataset(dataset_id)
     t0 = time.time()
-    result = compute_granger_causality(data)
+    result = await _run_heavy(compute_granger_causality, data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
     return _sanitize(result)
 
@@ -1058,7 +1058,7 @@ async def api_motifs(dataset_id: str):
     """Enumerate network motifs (3-node subgraph patterns)."""
     data = _get_dataset(dataset_id)
     t0 = time.time()
-    result = enumerate_motifs(data)
+    result = await _run_heavy(enumerate_motifs, data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
     return _sanitize(result)
 
@@ -1068,7 +1068,7 @@ async def api_energy_landscape(dataset_id: str):
     """Compute Ising model energy landscape."""
     data = _get_dataset(dataset_id)
     t0 = time.time()
-    result = fit_ising_model(data)
+    result = await _run_heavy(fit_ising_model, data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
     return _sanitize(result)
 
@@ -1088,7 +1088,7 @@ async def api_consciousness(dataset_id: str):
     """Composite consciousness assessment score."""
     data = _get_dataset(dataset_id)
     t0 = time.time()
-    result = compute_consciousness_score(data)
+    result = await _run_heavy(compute_consciousness_score, data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
     return _sanitize(result)
 
@@ -1098,7 +1098,7 @@ async def api_comparative(dataset_id: str):
     """Compare organoid with reference neural systems."""
     data = _get_dataset(dataset_id)
     t0 = time.time()
-    result = compare_with_references(data)
+    result = await _run_heavy(compare_with_references, data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
     return _sanitize(result)
 
