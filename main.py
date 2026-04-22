@@ -243,6 +243,28 @@ def _check_rate_limit(key: str, limit: int) -> bool:
         return True
 
 
+def _client_ip_from_request(request: Request) -> str:
+    """Extract real client IP through Caddy reverse proxy.
+
+    Caddy sets `X-Forwarded-For: <client-ip>` (see /etc/caddy/Caddyfile).
+    Without reading that header, `request.client.host` is always 127.0.0.1
+    and all users share one rate-limit bucket — first user to hit 60/min
+    locks out everyone else.
+
+    We trust the leftmost entry because only Caddy directly connects to us
+    on localhost; it overwrites any forged upstream header.
+    """
+    xff = request.headers.get("x-forwarded-for", "")
+    if xff:
+        first = xff.split(",")[0].strip()
+        if first:
+            return first
+    real_ip = request.headers.get("x-real-ip", "").strip()
+    if real_ip:
+        return real_ip
+    return request.client.host if request.client else "unknown"
+
+
 class RateLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         # Skip non-API and OPTIONS requests
@@ -250,7 +272,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if not path.startswith("/api/") or request.method == "OPTIONS":
             return await call_next(request)
 
-        client_ip = request.client.host if request.client else "unknown"
+        client_ip = _client_ip_from_request(request)
         heavy = _is_heavy_endpoint(path)
         limit = _RATE_LIMIT_HEAVY if heavy else _RATE_LIMIT_REGULAR
         bucket_key = f"{client_ip}:{'heavy' if heavy else 'regular'}"
@@ -845,13 +867,16 @@ async def analyze_features(dataset_id: str, window_sec: float = Query(1.0)):
 @app.get("/api/analysis/{dataset_id}/stdp")
 async def analyze_stdp(dataset_id: str, max_lag_ms: float = Query(30.0)):
     """STDP analysis — spike-timing dependent plasticity curves."""
-    return _sanitize(compute_stdp_matrix(_get_dataset(dataset_id), max_lag_ms=max_lag_ms))
+    # O(pairs × lag bins) — cap same as other pairwise analyses
+    data, _ = _get_dataset_capped(dataset_id, max_spikes=50_000)
+    return _sanitize(await _run_heavy(compute_stdp_matrix, data, max_lag_ms=max_lag_ms))
 
 
 @app.get("/api/analysis/{dataset_id}/learning")
 async def analyze_learning(dataset_id: str, window_sec: float = Query(60.0)):
     """Detect learning episodes — changes in plasticity over time."""
-    return _sanitize(detect_learning_episodes(_get_dataset(dataset_id), window_sec=window_sec))
+    data, _ = _get_dataset_capped(dataset_id, max_spikes=50_000)
+    return _sanitize(await _run_heavy(detect_learning_episodes, data, window_sec=window_sec))
 
 
 # ═══════════ ORGANOID IQ ═══════════
@@ -891,13 +916,16 @@ async def analyze_health(dataset_id: str):
 @app.get("/api/analysis/{dataset_id}/replay")
 async def analyze_replay(dataset_id: str, min_similarity: float = Query(0.3)):
     """Detect neural replay — memory consolidation signatures."""
-    return _sanitize(await _run_heavy(detect_replay, _get_dataset(dataset_id), min_similarity=min_similarity))
+    # O(N²) sequence matching — cap at 50K to stay under ~10s on FinalSpark
+    data, _ = _get_dataset_capped(dataset_id, max_spikes=50_000)
+    return _sanitize(await _run_heavy(detect_replay, data, min_similarity=min_similarity))
 
 
 @app.get("/api/analysis/{dataset_id}/sequences")
 async def analyze_sequences(dataset_id: str, min_length: int = Query(3)):
     """Detect repeated neural sequences — functional circuits."""
-    return _sanitize(await _run_heavy(detect_sequence_replay, _get_dataset(dataset_id), min_sequence_length=min_length))
+    data, _ = _get_dataset_capped(dataset_id, max_spikes=50_000)
+    return _sanitize(await _run_heavy(detect_sequence_replay, data, min_sequence_length=min_length))
 
 
 # ═══════════ RESERVOIR COMPUTING ═══════════
@@ -905,13 +933,15 @@ async def analyze_sequences(dataset_id: str, min_length: int = Query(3)):
 @app.get("/api/analysis/{dataset_id}/memory-capacity")
 async def analyze_memory_capacity(dataset_id: str, max_delay: int = Query(20)):
     """Estimate memory capacity of neural network as reservoir computer."""
-    return _sanitize(await _run_heavy(estimate_memory_capacity, _get_dataset(dataset_id), max_delay=max_delay))
+    data, _ = _get_dataset_capped(dataset_id)
+    return _sanitize(await _run_heavy(estimate_memory_capacity, data, max_delay=max_delay))
 
 
 @app.get("/api/analysis/{dataset_id}/nonlinearity")
 async def analyze_nonlinearity(dataset_id: str):
     """Benchmark nonlinear computational capability."""
-    return _sanitize(await _run_heavy(benchmark_nonlinear_computation, _get_dataset(dataset_id)))
+    data, _ = _get_dataset_capped(dataset_id)
+    return _sanitize(await _run_heavy(benchmark_nonlinear_computation, data))
 
 
 # ═══════════ FINGERPRINTING ═══════════
@@ -919,7 +949,8 @@ async def analyze_nonlinearity(dataset_id: str):
 @app.get("/api/analysis/{dataset_id}/fingerprint")
 async def analyze_fingerprint(dataset_id: str):
     """Compute unique organoid fingerprint — identity signature."""
-    return _sanitize(await _run_heavy(compute_fingerprint, _get_dataset(dataset_id)))
+    data, _ = _get_dataset_capped(dataset_id)
+    return _sanitize(await _run_heavy(compute_fingerprint, data))
 
 
 # ═══════════ SONIFICATION ═══════════
@@ -927,13 +958,15 @@ async def analyze_fingerprint(dataset_id: str):
 @app.get("/api/analysis/{dataset_id}/sonify")
 async def sonify(dataset_id: str, speed: float = Query(10.0), duration: Optional[float] = None):
     """Convert neural activity to audio WAV (base64 encoded)."""
-    return _sanitize(await _run_heavy(generate_sonification, _get_dataset(dataset_id), speed_factor=speed, duration_sec=duration))
+    data, _ = _get_dataset_capped(dataset_id)
+    return _sanitize(await _run_heavy(generate_sonification, data, speed_factor=speed, duration_sec=duration))
 
 
 @app.get("/api/analysis/{dataset_id}/rhythms")
 async def analyze_rhythms(dataset_id: str):
     """Analyze rhythmic structure of neural activity."""
-    return _sanitize(await _run_heavy(compute_rhythmic_analysis, _get_dataset(dataset_id)))
+    data, _ = _get_dataset_capped(dataset_id)
+    return _sanitize(await _run_heavy(compute_rhythmic_analysis, data))
 
 
 # ═══════════ CAUSAL EMERGENCE ═══════════
@@ -952,7 +985,8 @@ async def analyze_emergence(dataset_id: str):
 async def analyze_attractors(dataset_id: str, min_visits: int = Query(3)):
     """Map attractor landscape — find memory traces as dynamical states."""
     try:
-        return _sanitize(await _run_heavy(map_attractor_landscape, _get_dataset(dataset_id), min_visits=min_visits))
+        data, _ = _get_dataset_capped(dataset_id)
+        return _sanitize(await _run_heavy(map_attractor_landscape, data, min_visits=min_visits))
     except Exception as e:
         return {"error": str(e), "partial": True}
 
@@ -960,32 +994,39 @@ async def analyze_attractors(dataset_id: str, min_visits: int = Query(3)):
 @app.get("/api/analysis/{dataset_id}/state-space")
 async def analyze_state_space(dataset_id: str):
     """Analyze geometry of neural state space."""
-    return _sanitize(await _run_heavy(compute_state_space_geometry, _get_dataset(dataset_id)))
+    data, _ = _get_dataset_capped(dataset_id)
+    return _sanitize(await _run_heavy(compute_state_space_geometry, data))
 
 
 @app.get("/api/analysis/{dataset_id}/phase-transitions")
 async def analyze_phase_transitions(dataset_id: str, window_sec: float = Query(5.0)):
     """Detect phase transitions — moments of neural reorganization."""
-    return _sanitize(await _run_heavy(detect_phase_transitions, _get_dataset(dataset_id), window_sec=window_sec))
+    data, _ = _get_dataset_capped(dataset_id)
+    return _sanitize(await _run_heavy(detect_phase_transitions, data, window_sec=window_sec))
 
 
 @app.get("/api/analysis/{dataset_id}/predictive-coding")
 async def analyze_predictive_coding(dataset_id: str):
     """Measure predictive coding — does the organoid generate predictions?"""
-    return _sanitize(await _run_heavy(measure_predictive_coding, _get_dataset(dataset_id)))
+    data, _ = _get_dataset_capped(dataset_id)
+    return _sanitize(await _run_heavy(measure_predictive_coding, data))
 
 
 @app.get("/api/analysis/{dataset_id}/weights")
 async def analyze_weights(dataset_id: str):
     """Infer synaptic weight matrix from spike timing."""
-    return _sanitize(await _run_heavy(infer_synaptic_weights, _get_dataset(dataset_id)))
+    # O(N²) pairwise correlation — tighter cap than default
+    data, _ = _get_dataset_capped(dataset_id, max_spikes=50_000)
+    return _sanitize(await _run_heavy(infer_synaptic_weights, data))
 
 
 @app.get("/api/analysis/{dataset_id}/weight-tracking")
 async def analyze_weight_tracking(dataset_id: str, window_sec: float = Query(30.0)):
     """Track synaptic weight changes over time — watch learning happen."""
     try:
-        return _sanitize(await _run_heavy(track_weight_changes, _get_dataset(dataset_id), window_sec=window_sec))
+        # O(N²) per-window — tighter cap for sliding windows × pair correlation
+        data, _ = _get_dataset_capped(dataset_id, max_spikes=50_000)
+        return _sanitize(await _run_heavy(track_weight_changes, data, window_sec=window_sec))
     except Exception as e:
         return {"error": str(e), "partial": True}
 
@@ -993,7 +1034,8 @@ async def analyze_weight_tracking(dataset_id: str, window_sec: float = Query(30.
 @app.get("/api/analysis/{dataset_id}/multiscale")
 async def analyze_multiscale(dataset_id: str):
     """Multi-timescale complexity analysis — find operating frequency."""
-    return _sanitize(await _run_heavy(compute_multiscale_complexity, _get_dataset(dataset_id)))
+    data, _ = _get_dataset_capped(dataset_id)
+    return _sanitize(await _run_heavy(compute_multiscale_complexity, data))
 
 
 # ═══════════ FULL REPORT ═══════════
@@ -1078,7 +1120,7 @@ async def api_design_stimulus(dataset_id: str, generations: int = 15, population
     """Evolve optimal stimulation protocol using digital twin."""
     data = _get_dataset(dataset_id)
     t0 = time.time()
-    result = evolve_protocol(data, generations=generations, population_size=population_size)
+    result = await _run_heavy(evolve_protocol, data, generations=generations, population_size=population_size)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
     return _sanitize(result)
 
