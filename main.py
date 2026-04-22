@@ -9,12 +9,22 @@ FastAPI server that provides endpoints for:
 - Export (CSV, JSON)
 """
 
+import logging
 import os
 import time
 import uuid
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Optional
+
+# PM2 captures stdout/stderr; INFO-level logging surfaces in `pm2 logs`.
+# Format has timestamp + level + message so post-mortem analysis is easy.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+    datefmt="%Y-%m-%dT%H:%M:%S",
+)
+logger = logging.getLogger("neurobridge")
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -233,6 +243,10 @@ def _check_rate_limit(key: str, limit: int) -> bool:
         timestamps = _rate_buckets.get(key)
         if timestamps is None:
             _rate_buckets[key] = [now]
+            # Opportunistic cleanup — every ~1 in 50 requests, drop empty buckets.
+            # Without this, each unique IP leaves a dict entry forever (leak on 1M+ IPs).
+            if len(_rate_buckets) > 200 and uuid.uuid4().int % 50 == 0:
+                _gc_rate_buckets(now)
             return True
         # Purge entries older than 60 seconds
         cutoff = now - 60.0
@@ -241,6 +255,14 @@ def _check_rate_limit(key: str, limit: int) -> bool:
             return False
         timestamps.append(now)
         return True
+
+
+def _gc_rate_buckets(now: float) -> None:
+    """Drop bucket entries with no recent activity. Caller must hold _rate_lock."""
+    cutoff = now - 120.0  # 2× rate window — gives slack on lock contention
+    stale = [k for k, ts in _rate_buckets.items() if not ts or ts[-1] < cutoff]
+    for k in stale:
+        del _rate_buckets[k]
 
 
 def _client_ip_from_request(request: Request) -> str:
@@ -278,6 +300,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         bucket_key = f"{client_ip}:{'heavy' if heavy else 'regular'}"
 
         if not _check_rate_limit(bucket_key, limit):
+            logger.warning("rate_limit.hit ip=%s path=%s heavy=%s", client_ip, path, heavy)
             return _RateLimitResponse(
                 {"error": f"Rate limit exceeded. Max {limit} requests per minute for {'heavy analysis' if heavy else 'regular'} endpoints. Please wait and try again."},
                 status_code=429,
@@ -293,8 +316,8 @@ from starlette.responses import JSONResponse as StarletteJSONResponse
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
-    import traceback
-    traceback.print_exc()
+    # logger.exception includes traceback — more structured than print
+    logger.exception("unhandled_exception path=%s method=%s err=%s", request.url.path, request.method, str(exc)[:200])
     return StarletteJSONResponse(
         {"error": str(exc)[:200]},
         status_code=500,
@@ -340,6 +363,8 @@ async def health():
 
 # ═══════════ DATA MANAGEMENT ═══════════
 
+UPLOAD_MAX_BYTES = 100 * 1024 * 1024  # 100 MB hard cap
+
 @app.post("/api/upload")
 async def upload_dataset(
     file: UploadFile = File(...),
@@ -349,7 +374,21 @@ async def upload_dataset(
     dataset_id = str(uuid.uuid4())[:8]
     filepath = UPLOAD_DIR / f"{dataset_id}_{file.filename}"
 
-    content = await file.read()
+    # Stream-read with running size check — don't await .read() on a 500MB file
+    # (would load entire content in RAM, OOM risk). Abort as soon as we cross cap.
+    size = 0
+    chunks: list[bytes] = []
+    while True:
+        chunk = await file.read(1024 * 1024)  # 1MB chunks
+        if not chunk:
+            break
+        size += len(chunk)
+        if size > UPLOAD_MAX_BYTES:
+            logger.warning("upload.rejected filename=%r size_mb=%.1f reason=too_large", file.filename, size / 1024 / 1024)
+            raise HTTPException(status_code=413, detail=f"File too large. Max {UPLOAD_MAX_BYTES // 1024 // 1024}MB.")
+        chunks.append(chunk)
+    content = b"".join(chunks)
+
     with open(filepath, "wb") as f:
         f.write(content)
 
@@ -360,6 +399,10 @@ async def upload_dataset(
 
         _store_dataset(dataset_id, data)
 
+        logger.info(
+            "upload.ok id=%s filename=%r size_mb=%.2f n_spikes=%d n_electrodes=%d duration_s=%.1f load_ms=%.0f",
+            dataset_id, file.filename, len(content) / 1024 / 1024, data.n_spikes, data.n_electrodes, data.duration, load_time,
+        )
         return {
             "dataset_id": dataset_id,
             "filename": file.filename,
@@ -374,6 +417,7 @@ async def upload_dataset(
         }
     except Exception as e:
         filepath.unlink(missing_ok=True)
+        logger.warning("upload.parse_failed filename=%r err=%s", file.filename, str(e)[:200])
         raise HTTPException(status_code=400, detail=f"Failed to parse file: {str(e)}")
 
 
@@ -1781,6 +1825,13 @@ async def api_morphology(dataset_id: str):
 
 import asyncio
 
+# Per-IP WebSocket connection tracker — stops one user from opening 10K sockets.
+# Keyed by IP (same extraction logic as HTTP rate limiter).
+_ws_connections: dict[str, int] = {}
+_ws_lock = _rl_threading.Lock()
+_WS_MAX_PER_IP = 3
+
+
 @app.websocket("/ws/spikes")
 async def ws_live_spikes(ws: WebSocket):
     """Stream synthetic spike data in real-time via WebSocket.
@@ -1788,7 +1839,23 @@ async def ws_live_spikes(ws: WebSocket):
     Sends JSON frames every 100ms with spike events.
     Protocol: connect → receive frames → disconnect.
     Each frame: {"spikes": [{"time": float, "electrode": int, "amplitude": float}], "timestamp": float}
+
+    Connections per IP are capped — WebSockets are cheap to open but expensive
+    to serve (each spawns an async loop that runs forever). Without a cap, a
+    single abusive client could exhaust memory.
     """
+    # Extract client IP through Caddy (same logic as _client_ip_from_request).
+    xff = ws.headers.get("x-forwarded-for", "")
+    client_ip = (xff.split(",")[0].strip() if xff else ws.headers.get("x-real-ip", "").strip()) or (ws.client.host if ws.client else "unknown")
+
+    with _ws_lock:
+        if _ws_connections.get(client_ip, 0) >= _WS_MAX_PER_IP:
+            logger.warning("ws.rejected ip=%s reason=per_ip_limit current=%d", client_ip, _ws_connections[client_ip])
+            await ws.close(code=1008, reason="Too many connections from your IP")
+            return
+        _ws_connections[client_ip] = _ws_connections.get(client_ip, 0) + 1
+
+    logger.info("ws.open ip=%s total=%d", client_ip, _ws_connections[client_ip])
     await ws.accept()
     t = 0.0
     dt = 0.1  # 100ms intervals
@@ -1812,6 +1879,14 @@ async def ws_live_spikes(ws: WebSocket):
             await asyncio.sleep(dt)
     except WebSocketDisconnect:
         pass
+    finally:
+        with _ws_lock:
+            remaining = _ws_connections.get(client_ip, 1) - 1
+            if remaining <= 0:
+                _ws_connections.pop(client_ip, None)
+            else:
+                _ws_connections[client_ip] = remaining
+        logger.info("ws.close ip=%s remaining=%d", client_ip, remaining if remaining > 0 else 0)
 
 
 # ═══════════ MULTI-ORGANOID ═══════════
