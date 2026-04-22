@@ -358,14 +358,29 @@ def _store_dataset(dataset_id: str, data: SpikeData) -> None:
 
 @app.get("/health")
 async def health():
+    """Minimal public health check — just confirms the API is alive.
+    Internal metrics moved to /health/detailed (operator-only)."""
+    return {
+        "status": "ok",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@app.get("/health/detailed")
+async def health_detailed():
+    """Detailed health metrics — for monitoring dashboards, not public UI."""
     import psutil
     mem = psutil.virtual_memory()
     return {
         "status": "ok",
         "datasets_loaded": len(datasets),
         "max_datasets": _MAX_DATASETS,
+        "evicted_history_size": len(_evicted_ids),
+        "rate_buckets": len(_rate_buckets),
+        "ws_connections": sum(_ws_connections.values()),
         "memory_used_mb": round(mem.used / 1024 / 1024),
         "memory_available_mb": round(mem.available / 1024 / 1024),
+        "memory_percent": round(mem.percent, 1),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
