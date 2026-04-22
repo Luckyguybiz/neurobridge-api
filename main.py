@@ -328,6 +328,12 @@ async def global_exception_handler(request, exc):
 datasets: dict[str, SpikeData] = {}
 _MAX_DATASETS = 2  # Auto-evict oldest when exceeded (OOM protection)
 
+# Remember evicted dataset IDs (bounded set) so /get_dataset can return
+# 410 Gone instead of a confusing 404 — the frontend shows "your session
+# was replaced by another user's data" and offers to reload.
+_evicted_ids: list[str] = []  # kept as list for FIFO bounded history
+_EVICTED_HISTORY = 64
+
 # Semaphore: max 1 heavy computation at a time (prevents 100% CPU lockup)
 import asyncio as _asyncio
 _compute_semaphore = _asyncio.Semaphore(1)
@@ -342,6 +348,9 @@ def _store_dataset(dataset_id: str, data: SpikeData) -> None:
     while len(datasets) >= _MAX_DATASETS:
         oldest_id = next(iter(datasets))
         del datasets[oldest_id]
+        _evicted_ids.append(oldest_id)
+        if len(_evicted_ids) > _EVICTED_HISTORY:
+            _evicted_ids.pop(0)
     datasets[dataset_id] = data
 
 
@@ -2079,9 +2088,17 @@ async def export_json(dataset_id: str):
 # ═══════════ HELPERS ═══════════
 
 def _get_dataset(dataset_id: str) -> SpikeData:
-    if dataset_id not in datasets:
-        raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found. Upload data first via POST /api/upload")
-    return datasets[dataset_id]
+    if dataset_id in datasets:
+        return datasets[dataset_id]
+    if dataset_id in _evicted_ids:
+        # 410 Gone signals "it existed but was released" vs "never existed".
+        # Frontend uses the distinction to show "session replaced, reload" UX
+        # instead of the generic "dataset not found".
+        raise HTTPException(
+            status_code=410,
+            detail=f"Dataset '{dataset_id}' was evicted to free memory. Reload the page to start a new session.",
+        )
+    raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found. Upload data first via POST /api/upload")
 
 
 # Auto-subsample for heavy endpoints: cap at MAX_SPIKES for O(N²) analyses
