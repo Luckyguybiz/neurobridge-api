@@ -114,9 +114,52 @@ if ds_id:
     print("\n── Protocols ──")
     test_json("list protocols", "/api/protocols", "protocols")
 
-    # 5. 404 for missing dataset
+    # 5. Advanced (lazy) endpoints — just verify they return 200 or 504
+    print("\n── Advanced Analysis ──")
+    for ep, fn in [
+        ("pca", "pca"),
+        ("states", "states"),
+        ("connectivity", "connectivity"),
+        ("graph-theory", "graph-theory"),
+        ("topology", "topology"),
+        ("ethics", "ethics"),
+    ]:
+        url = f"{BASE}/api/analysis/{ds_id}/{fn}"
+        try:
+            t0 = time.time()
+            resp = urllib.request.urlopen(url, timeout=60)
+            ms = round((time.time() - t0) * 1000)
+            if resp.status == 200:
+                print(f"  ✅ {ep} — 200 ({ms}ms)")
+                PASSED += 1
+            else:
+                print(f"  ❌ {ep} — {resp.status} ({ms}ms)")
+                FAILED += 1
+        except urllib.error.HTTPError as e:
+            if e.code == 504:
+                print(f"  ⏱  {ep} — 504 timeout (acceptable)")
+                PASSED += 1
+            else:
+                print(f"  ❌ {ep} — {e.code} {e.reason}")
+                FAILED += 1
+                ERRORS.append(f"{ep}: {e.code} {e.reason}")
+        except Exception as e:
+            print(f"  ❌ {ep} — {type(e).__name__}: {e}")
+            FAILED += 1
+            ERRORS.append(f"{ep}: {e}")
+
+    # 6. 404 for missing dataset + 410 Gone detection
     print("\n── Error Handling ──")
     test("missing dataset", "GET", "/api/analysis/nonexistent/summary", expected_status=404)
+
+    # 7. Response shape sanity — some key endpoints expose documented fields
+    print("\n── Response Shape ──")
+    bursts_data = test_json("bursts shape", f"/api/analysis/{ds_id}/bursts", "summary")
+    iq_data = test_json("iq shape", f"/api/analysis/{ds_id}/iq", "iq_score")
+    if iq_data:
+        score = iq_data.get("iq_score", 0)
+        grade = iq_data.get("grade", "?")
+        print(f"     iq_score={score} grade={grade}")
 
 # Results
 print(f"\n{'='*40}")

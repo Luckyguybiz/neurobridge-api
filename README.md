@@ -31,27 +31,47 @@ python main.py
 # → http://localhost:8847/docs (Swagger UI)
 ```
 
-### Generate synthetic data and analyze:
+### Generate synthetic data and analyze (against live API):
 ```bash
 # Generate 30s of synthetic spike data
-curl -X POST "http://localhost:8847/api/generate?duration=30"
-# → {"dataset_id": "abc12345", "n_spikes": 2141, ...}
+DSID=$(curl -s -X POST "https://api.neurocomputers.io/api/generate?duration=30" \
+  | python3 -c "import sys, json; print(json.load(sys.stdin)['dataset_id'])")
 
-# Run ALL 25+ analyses in one call
-curl "http://localhost:8847/api/analysis/abc12345/full-report"
+# Run a cheap analysis first
+curl "https://api.neurocomputers.io/api/analysis/$DSID/summary"
 
-# Get Organoid IQ score
-curl "http://localhost:8847/api/analysis/abc12345/iq"
-# → {"iq_score": 49.2, "grade": "C", ...}
+# Get NCI Score (Network Complexity Index)
+curl "https://api.neurocomputers.io/api/analysis/$DSID/iq"
+# → {"iq_score": 51.0, "grade": "C", ...}
+
+# Full report (runs everything — takes a while)
+curl "https://api.neurocomputers.io/api/analysis/$DSID/full-report"
 ```
 
-### Upload real data:
+### Load the built-in FinalSpark 118-hour recording:
 ```bash
-curl -X POST "http://localhost:8847/api/upload" \
+DSID=$(curl -s -X POST \
+  "https://api.neurocomputers.io/api/load-local?filename=SpikeDataToShare_fs437data.csv&sampling_rate=437" \
+  | python3 -c "import sys, json; print(json.load(sys.stdin)['dataset_id'])")
+
+# 2.6M spikes, 32 channels, 4 organoids, 5 days
+curl "https://api.neurocomputers.io/api/analysis/$DSID/summary"
+```
+
+### Upload your own data:
+```bash
+curl -X POST "https://api.neurocomputers.io/api/upload" \
   -F "file=@my_spikes.csv"
 ```
 
-Supported formats: CSV, HDF5, Parquet, JSON, NWB.
+Supported formats: CSV, HDF5, Parquet, JSON, NWB. 100 MB max per file.
+
+### Operational notes
+- **Rate limits:** 60 req/min regular endpoints, 5 req/min for heavy analyses (bursts/connectivity/cross-correlation/transfer-entropy/full-report). Per-IP.
+- **Per-analysis timeout:** 45 s. Slower computations return `504 Gateway Timeout` with a readable message.
+- **Concurrent heavy computations:** 1 at a time (single CPU semaphore). Others queue.
+- **Dataset capacity:** 2 concurrent datasets in RAM; oldest is evicted and returns `410 Gone` on subsequent access.
+- **Auto-subsampling:** heavy endpoints cap input to 10K–20K spikes for pairwise O(N²) work. Responses include `_subsampled: true` when this happens.
 
 ---
 
