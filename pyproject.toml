@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "neurocomputers"
-version = "0.1.0"
+version = "0.2.0"
 description = "Analysis engine for brain organoid data — 57 modules, from spike sorting to Organoid IQ"
 readme = "README.md"
 license = {text = "MIT"}
@@ -63,4 +63,4 @@ Issues = "https://github.com/Luckyguybiz/neurobridge-api/issues"
 neurobridge = "neurobridge.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["neurobridge*"]
+include = ["neurobridge*", "analysis*"]
