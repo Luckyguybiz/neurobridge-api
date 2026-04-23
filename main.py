@@ -1603,9 +1603,10 @@ async def api_ethics(
     organoid_type: Optional[str] = None,
 ):
     """Full ethical assessment: consciousness indicators, sentience risk, guidelines, compliance."""
-    data, _ = _get_dataset_capped(dataset_id)
+    # Internally calls the full consciousness/Phi pipeline — tight cap
+    data, _ = _get_dataset_capped(dataset_id, max_spikes=20_000)
     t0 = time.time()
-    result = assess_ethics(data, culture_age_days=culture_age_days, organoid_type=organoid_type)
+    result = await _run_heavy(assess_ethics, data, culture_age_days=culture_age_days, organoid_type=organoid_type)
     result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
     return _sanitize(result)
 
