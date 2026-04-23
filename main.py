@@ -1005,20 +1005,26 @@ async def analyze_transfer_entropy(
     dataset_id: str,
     bin_size_ms: float = Query(5.0),
     history_bins: int = Query(5, ge=1, le=20),
+    n_surrogates: int = Query(50, ge=10, le=500, description="Surrogates per pair for significance testing"),
     subset: Optional[str] = Query(None),
 ):
     """Transfer entropy — directional information flow between electrodes.
 
-    TE complexity = PAIRS × BINS × HISTORY² = 1024 × (duration_s/bin_size) × 25.
-    Clamp duration at 300s so 1h subset still completes: 1024 × 60K × 25 =
-    1.5B ops, runs in <30s. Without the cap, 3600s duration pushed to 240s+.
+    Complexity = PAIRS × SURROGATES × BINS. On 32 electrodes = 1024 pairs.
+    Default n_surrogates=50 (lowered from 200) → 50K TE calls, runs in ~60s
+    on 300s duration. Users can request more surrogates for tighter p-values.
     """
     import asyncio
     data, subsampled = _get_dataset_capped(dataset_id, max_spikes=10_000, subset=subset, max_duration_sec=300)
-    raw = await _run_heavy(compute_transfer_entropy, data, bin_size_ms, history_bins, timeout_sec=_TIMEOUT_VERY_HEAVY_SEC)
+    raw = await _run_heavy(
+        compute_transfer_entropy, data, bin_size_ms, history_bins,
+        n_surrogates=n_surrogates,
+        timeout_sec=_TIMEOUT_VERY_HEAVY_SEC,
+    )
     result = _sanitize(raw)
     if subsampled:
         result["_subsampled"] = True
+    result["_n_surrogates"] = n_surrogates
     return result
 
 
