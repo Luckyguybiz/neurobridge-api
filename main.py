@@ -736,7 +736,7 @@ async def analyze_temporal(
     """Temporal dynamics — trends, stationarity, Fano factors."""
     data, subsampled = _get_dataset_capped(dataset_id, max_spikes=500_000)
     try:
-        result = _sanitize(compute_temporal_dynamics(data, bin_size_sec=bin_size))
+        result = _sanitize(await _run_heavy(compute_temporal_dynamics, data, bin_size_sec=bin_size))
         if subsampled:
             result["_subsampled"] = True
             result["_subsampled_spikes"] = data.n_spikes
@@ -785,7 +785,7 @@ async def analyze_burst_profiles(
 ):
     """Detailed burst profiles — recruitment order, temporal shape."""
     data, _ = _get_dataset_capped(dataset_id)
-    result = _sanitize(detect_bursts(data))
+    result = _sanitize(await _run_heavy(detect_bursts, data))
     return result.get("network", result)
 
 
@@ -1319,7 +1319,7 @@ async def api_compare_strategies(dataset_id: str, n_episodes: int = Query(15, ge
     """Compare all 4 reward strategies (hebbian/dopamine/contrastive/reinforce)."""
     data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
-    result = compare_reward_strategies(data, n_episodes=n_episodes)
+    result = await _run_heavy(compare_reward_strategies, data, n_episodes=n_episodes)
     result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
     return _sanitize(result)
 
@@ -1679,7 +1679,7 @@ async def api_architecture_search(dataset_id: str, generations: int = 15, popula
     """Neural Architecture Search for optimal stimulation protocol."""
     data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
-    result = search_optimal_protocol(data, population_size=population_size, generations=generations)
+    result = await _run_heavy(search_optimal_protocol, data, population_size=population_size, generations=generations)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
     return _sanitize(result)
 
@@ -1971,7 +1971,7 @@ async def analyze_multi_organoid(
     if cached:
         return cached
     t0 = time.time()
-    result = compare_organoids(data, electrodes_per_organoid=electrodes_per_organoid)
+    result = await _run_heavy(compare_organoids, data, electrodes_per_organoid=electrodes_per_organoid)
     result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
     _cache_set(dataset_id, f"multi-organoid-{electrodes_per_organoid}", result)
     return _sanitize(result)
@@ -1991,9 +1991,9 @@ async def analyze_temporal_evolution(
     if mode == "trends":
         result = await _run_heavy(detect_trends, data, window_sec=window_sec)
     elif mode == "critical":
-        result = find_critical_moments(data, window_sec=window_sec)
+        result = await _run_heavy(find_critical_moments, data, window_sec=window_sec)
     else:
-        evolution = track_evolution(data, window_sec=window_sec)
+        evolution = await _run_heavy(track_evolution, data, window_sec=window_sec)
         trends = detect_trends(data, window_sec=window_sec)
         critical = find_critical_moments(data, window_sec=window_sec)
         result = {
