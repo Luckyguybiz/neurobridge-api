@@ -344,27 +344,33 @@ _EVICTED_HISTORY = 64
 import asyncio as _asyncio
 _compute_semaphore = _asyncio.Semaphore(1)
 
-# Hard cap on a single heavy computation — 45s. Beyond that we abandon
-# the caller and release the semaphore so the rest of the queue progresses.
-# The underlying thread keeps running inside the Python process (asyncio
-# doesn't truly cancel threads), but it's now detached and its result is
-# discarded. Caller gets HTTP 504.
-_HEAVY_TIMEOUT_SEC = 45.0
+# Tiered timeouts. Caddy upstream timeout is 300s, so we can go up to 270s
+# safely. Old default was 45s for everything — too aggressive for O(N²) ops
+# that genuinely need 60-90s to converge. Split into three classes so fast
+# ops still fail fast (firing-rates should not take 2 min = something wrong).
+_TIMEOUT_NORMAL_SEC = 45.0   # firing-rates, bursts, isi, summary, etc.
+_TIMEOUT_HEAVY_SEC = 120.0   # connectivity, cross-correlation, IQ (O(N²))
+_TIMEOUT_VERY_HEAVY_SEC = 240.0  # metastability, transfer-entropy, IIT, turing
+_HEAVY_TIMEOUT_SEC = _TIMEOUT_NORMAL_SEC  # back-compat alias
 
 
-async def _run_heavy(func, *args, **kwargs):
-    """Run CPU-heavy function with semaphore (max 1 at a time) and timeout."""
+async def _run_heavy(func, *args, timeout_sec: float = _TIMEOUT_NORMAL_SEC, **kwargs):
+    """Run CPU-heavy function with semaphore (max 1 at a time) and timeout.
+
+    Pass timeout_sec=_TIMEOUT_HEAVY_SEC or _TIMEOUT_VERY_HEAVY_SEC for
+    endpoints known to need more than 45s on FinalSpark-sized inputs.
+    """
     async with _compute_semaphore:
         try:
             return await _asyncio.wait_for(
                 _asyncio.to_thread(func, *args, **kwargs),
-                timeout=_HEAVY_TIMEOUT_SEC,
+                timeout=timeout_sec,
             )
         except _asyncio.TimeoutError:
-            logger.warning("heavy.timeout func=%s args=%d", getattr(func, "__name__", "?"), len(args))
+            logger.warning("heavy.timeout func=%s timeout=%.0fs", getattr(func, "__name__", "?"), timeout_sec)
             raise HTTPException(
                 status_code=504,
-                detail=f"Analysis took longer than {int(_HEAVY_TIMEOUT_SEC)}s and was abandoned. Try a smaller dataset or a faster endpoint.",
+                detail=f"Analysis took longer than {int(timeout_sec)}s and was abandoned. Try a smaller time range (e.g. subset=1h) or a faster endpoint.",
             )
 
 
@@ -953,6 +959,7 @@ async def analyze_connectivity(
     dataset_id: str,
     window_ms: float = Query(10.0, ge=1.0),
     min_strength: float = Query(0.02, ge=0.0),
+    subset: Optional[str] = Query(None, description="Time subset: 1h, 10h, full, or Ns/Nmin/Nh"),
 ):
     """Functional connectivity graph -- fast default (CCG + co-firing).
 
@@ -960,9 +967,9 @@ async def analyze_connectivity(
     include_granger=true, or include_all=true for expensive measures.
     """
     import asyncio
-    data, subsampled = _get_dataset_capped(dataset_id, max_spikes=10_000)
+    data, subsampled = _get_dataset_capped(dataset_id, max_spikes=10_000, subset=subset)
     t0 = time.time()
-    conn = await _run_heavy(compute_connectivity_graph, data, window_ms)
+    conn = await _run_heavy(compute_connectivity_graph, data, window_ms, timeout_sec=_TIMEOUT_HEAVY_SEC)
     try:
         result = connectivity_to_dict(conn)
     except Exception:
@@ -980,11 +987,12 @@ async def analyze_cross_correlation(
     dataset_id: str,
     max_lag_ms: float = Query(50.0),
     bin_size_ms: float = Query(1.0),
+    subset: Optional[str] = Query(None),
 ):
     """Pairwise cross-correlograms between all electrodes."""
     import asyncio
-    data, subsampled = _get_dataset_capped(dataset_id, max_spikes=10_000)
-    raw = await _run_heavy(compute_cross_correlation, data, max_lag_ms, bin_size_ms)
+    data, subsampled = _get_dataset_capped(dataset_id, max_spikes=10_000, subset=subset)
+    raw = await _run_heavy(compute_cross_correlation, data, max_lag_ms, bin_size_ms, timeout_sec=_TIMEOUT_HEAVY_SEC)
     result = _sanitize(raw)
     if subsampled:
         result["_subsampled"] = True
@@ -996,12 +1004,13 @@ async def analyze_transfer_entropy(
     dataset_id: str,
     bin_size_ms: float = Query(5.0),
     history_bins: int = Query(5, ge=1, le=20),
+    subset: Optional[str] = Query(None),
 ):
     """Transfer entropy — directional information flow between electrodes."""
     import asyncio
     # 32² pairs × history_bins discrete states — tightest cap in this group
-    data, subsampled = _get_dataset_capped(dataset_id, max_spikes=10_000)
-    raw = await _run_heavy(compute_transfer_entropy, data, bin_size_ms, history_bins)
+    data, subsampled = _get_dataset_capped(dataset_id, max_spikes=10_000, subset=subset)
+    raw = await _run_heavy(compute_transfer_entropy, data, bin_size_ms, history_bins, timeout_sec=_TIMEOUT_VERY_HEAVY_SEC)
     result = _sanitize(raw)
     if subsampled:
         result["_subsampled"] = True
@@ -1129,11 +1138,11 @@ async def analyze_learning(dataset_id: str, window_sec: float = Query(60.0)):
 # ═══════════ ORGANOID IQ ═══════════
 
 @app.get("/api/analysis/{dataset_id}/iq")
-async def analyze_iq(dataset_id: str):
+async def analyze_iq(dataset_id: str, subset: Optional[str] = Query(None)):
     """Organoid Intelligence Quotient — composite computational capacity score."""
     import asyncio
-    data, _ = _get_dataset_capped(dataset_id)
-    return _sanitize(await _run_heavy(compute_organoid_iq, data))
+    data, _ = _get_dataset_capped(dataset_id, subset=subset)
+    return _sanitize(await _run_heavy(compute_organoid_iq, data, timeout_sec=_TIMEOUT_HEAVY_SEC))
 
 
 # ═══════════ PREDICTIONS ═══════════
@@ -1163,18 +1172,18 @@ async def analyze_health(dataset_id: str):
 # ═══════════ NEURAL REPLAY ═══════════
 
 @app.get("/api/analysis/{dataset_id}/replay")
-async def analyze_replay(dataset_id: str, min_similarity: float = Query(0.3)):
+async def analyze_replay(dataset_id: str, min_similarity: float = Query(0.3), subset: Optional[str] = Query(None)):
     """Detect neural replay — memory consolidation signatures."""
     # O(N²) sequence matching — cap at 50K to stay under ~10s on FinalSpark
-    data, _ = _get_dataset_capped(dataset_id, max_spikes=50_000)
-    return _sanitize(await _run_heavy(detect_replay, data, min_similarity=min_similarity))
+    data, _ = _get_dataset_capped(dataset_id, max_spikes=50_000, subset=subset)
+    return _sanitize(await _run_heavy(detect_replay, data, min_similarity=min_similarity, timeout_sec=_TIMEOUT_HEAVY_SEC))
 
 
 @app.get("/api/analysis/{dataset_id}/sequences")
-async def analyze_sequences(dataset_id: str, min_length: int = Query(3)):
+async def analyze_sequences(dataset_id: str, min_length: int = Query(3), subset: Optional[str] = Query(None)):
     """Detect repeated neural sequences — functional circuits."""
-    data, _ = _get_dataset_capped(dataset_id, max_spikes=50_000)
-    return _sanitize(await _run_heavy(detect_sequence_replay, data, min_sequence_length=min_length))
+    data, _ = _get_dataset_capped(dataset_id, max_spikes=50_000, subset=subset)
+    return _sanitize(await _run_heavy(detect_sequence_replay, data, min_sequence_length=min_length, timeout_sec=_TIMEOUT_HEAVY_SEC))
 
 
 # ═══════════ RESERVOIR COMPUTING ═══════════
@@ -1196,10 +1205,10 @@ async def analyze_nonlinearity(dataset_id: str):
 # ═══════════ FINGERPRINTING ═══════════
 
 @app.get("/api/analysis/{dataset_id}/fingerprint")
-async def analyze_fingerprint(dataset_id: str):
+async def analyze_fingerprint(dataset_id: str, subset: Optional[str] = Query(None)):
     """Compute unique organoid fingerprint — identity signature."""
-    data, _ = _get_dataset_capped(dataset_id)
-    return _sanitize(await _run_heavy(compute_fingerprint, data))
+    data, _ = _get_dataset_capped(dataset_id, subset=subset)
+    return _sanitize(await _run_heavy(compute_fingerprint, data, timeout_sec=_TIMEOUT_HEAVY_SEC))
 
 
 # ═══════════ SONIFICATION ═══════════
@@ -1221,11 +1230,11 @@ async def analyze_rhythms(dataset_id: str):
 # ═══════════ CAUSAL EMERGENCE ═══════════
 
 @app.get("/api/analysis/{dataset_id}/emergence")
-async def analyze_emergence(dataset_id: str):
+async def analyze_emergence(dataset_id: str, subset: Optional[str] = Query(None)):
     """Compute integrated information (Phi) and causal emergence."""
     import asyncio
-    data, _ = _get_dataset_capped(dataset_id, max_spikes=20_000)  # IIT Phi is O(2^N), needs small dataset
-    return _sanitize(await _run_heavy(compute_integrated_information, data))
+    data, _ = _get_dataset_capped(dataset_id, max_spikes=20_000, subset=subset)  # IIT Phi is O(2^N), needs small dataset
+    return _sanitize(await _run_heavy(compute_integrated_information, data, timeout_sec=_TIMEOUT_VERY_HEAVY_SEC))
 
 
 # ═══════════ BREAKTHROUGH MODULES ═══════════
@@ -1248,53 +1257,53 @@ async def analyze_state_space(dataset_id: str):
 
 
 @app.get("/api/analysis/{dataset_id}/phase-transitions")
-async def analyze_phase_transitions(dataset_id: str, window_sec: float = Query(5.0)):
+async def analyze_phase_transitions(dataset_id: str, window_sec: float = Query(5.0), subset: Optional[str] = Query(None)):
     """Detect phase transitions — moments of neural reorganization."""
-    data, _ = _get_dataset_capped(dataset_id)
-    return _sanitize(await _run_heavy(detect_phase_transitions, data, window_sec=window_sec))
+    data, _ = _get_dataset_capped(dataset_id, subset=subset)
+    return _sanitize(await _run_heavy(detect_phase_transitions, data, window_sec=window_sec, timeout_sec=_TIMEOUT_HEAVY_SEC))
 
 
 @app.get("/api/analysis/{dataset_id}/predictive-coding")
-async def analyze_predictive_coding(dataset_id: str):
+async def analyze_predictive_coding(dataset_id: str, subset: Optional[str] = Query(None)):
     """Measure predictive coding — does the organoid generate predictions?"""
-    data, _ = _get_dataset_capped(dataset_id)
-    return _sanitize(await _run_heavy(measure_predictive_coding, data))
+    data, _ = _get_dataset_capped(dataset_id, subset=subset)
+    return _sanitize(await _run_heavy(measure_predictive_coding, data, timeout_sec=_TIMEOUT_HEAVY_SEC))
 
 
 @app.get("/api/analysis/{dataset_id}/weights")
-async def analyze_weights(dataset_id: str):
+async def analyze_weights(dataset_id: str, subset: Optional[str] = Query(None)):
     """Infer synaptic weight matrix from spike timing."""
     # O(N²) pairwise correlation — tightest cap
-    data, _ = _get_dataset_capped(dataset_id, max_spikes=10_000)
-    return _sanitize(await _run_heavy(infer_synaptic_weights, data))
+    data, _ = _get_dataset_capped(dataset_id, max_spikes=10_000, subset=subset)
+    return _sanitize(await _run_heavy(infer_synaptic_weights, data, timeout_sec=_TIMEOUT_HEAVY_SEC))
 
 
 @app.get("/api/analysis/{dataset_id}/weight-tracking")
-async def analyze_weight_tracking(dataset_id: str, window_sec: float = Query(30.0)):
+async def analyze_weight_tracking(dataset_id: str, window_sec: float = Query(30.0), subset: Optional[str] = Query(None)):
     """Track synaptic weight changes over time — watch learning happen."""
     try:
         # O(N²) per-window — tightest cap because windows multiply the work
-        data, _ = _get_dataset_capped(dataset_id, max_spikes=10_000)
-        return _sanitize(await _run_heavy(track_weight_changes, data, window_sec=window_sec))
+        data, _ = _get_dataset_capped(dataset_id, max_spikes=10_000, subset=subset)
+        return _sanitize(await _run_heavy(track_weight_changes, data, window_sec=window_sec, timeout_sec=_TIMEOUT_HEAVY_SEC))
     except Exception as e:
         return {"error": str(e), "partial": True}
 
 
 @app.get("/api/analysis/{dataset_id}/multiscale")
-async def analyze_multiscale(dataset_id: str):
+async def analyze_multiscale(dataset_id: str, subset: Optional[str] = Query(None)):
     """Multi-timescale complexity analysis — find operating frequency."""
-    data, _ = _get_dataset_capped(dataset_id)
-    return _sanitize(await _run_heavy(compute_multiscale_complexity, data))
+    data, _ = _get_dataset_capped(dataset_id, subset=subset)
+    return _sanitize(await _run_heavy(compute_multiscale_complexity, data, timeout_sec=_TIMEOUT_HEAVY_SEC))
 
 
 # ═══════════ FULL REPORT ═══════════
 
 @app.get("/api/analysis/{dataset_id}/full-report")
-async def full_report(dataset_id: str):
+async def full_report(dataset_id: str, subset: Optional[str] = Query(None)):
     """Run ALL 21 analyses and generate comprehensive report."""
     import asyncio
-    data, subsampled = _get_dataset_capped(dataset_id)
-    report = await _run_heavy(generate_full_report, data)
+    data, subsampled = _get_dataset_capped(dataset_id, subset=subset)
+    report = await _run_heavy(generate_full_report, data, timeout_sec=_TIMEOUT_VERY_HEAVY_SEC)
     report = _sanitize(report)
     if subsampled:
         report["_subsampled"] = True
@@ -1305,53 +1314,53 @@ async def full_report(dataset_id: str):
 # ═══════════ DISCOVERY ANALYSIS ═══════════
 
 @app.get("/api/analysis/{dataset_id}/sleep-wake")
-async def api_sleep_wake(dataset_id: str):
+async def api_sleep_wake(dataset_id: str, subset: Optional[str] = Query(None)):
     """Detect sleep-wake-like cycles in organoid activity."""
-    data, _ = _get_dataset_capped(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id, subset=subset)
     t0 = time.time()
-    result = await _run_heavy(analyze_sleep_wake, data)
+    result = await _run_heavy(analyze_sleep_wake, data, timeout_sec=_TIMEOUT_HEAVY_SEC)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
     return _sanitize(result)
 
 
 @app.get("/api/analysis/{dataset_id}/habituation")
-async def api_habituation(dataset_id: str):
+async def api_habituation(dataset_id: str, subset: Optional[str] = Query(None)):
     """Detect habituation — response decay to repeated patterns."""
-    data, _ = _get_dataset_capped(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id, subset=subset)
     t0 = time.time()
-    result = await _run_heavy(detect_repeated_patterns, data)
+    result = await _run_heavy(detect_repeated_patterns, data, timeout_sec=_TIMEOUT_HEAVY_SEC)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
     return _sanitize(result)
 
 
 @app.get("/api/analysis/{dataset_id}/metastability")
-async def api_metastability(dataset_id: str):
+async def api_metastability(dataset_id: str, subset: Optional[str] = Query(None)):
     """Analyze metastability — brain-like state switching dynamics."""
-    data, _ = _get_dataset_capped(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id, subset=subset)
     t0 = time.time()
-    result = await _run_heavy(analyze_metastability, data)
+    result = await _run_heavy(analyze_metastability, data, timeout_sec=_TIMEOUT_VERY_HEAVY_SEC)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
     return _sanitize(result)
 
 
 @app.get("/api/analysis/{dataset_id}/information-flow")
-async def api_information_flow(dataset_id: str):
+async def api_information_flow(dataset_id: str, subset: Optional[str] = Query(None)):
     """Map directed information flow using Granger causality."""
     # Granger is O(pairs × history) — tightest cap
-    data, _ = _get_dataset_capped(dataset_id, max_spikes=10_000)
+    data, _ = _get_dataset_capped(dataset_id, max_spikes=10_000, subset=subset)
     t0 = time.time()
-    result = await _run_heavy(compute_granger_causality, data)
+    result = await _run_heavy(compute_granger_causality, data, timeout_sec=_TIMEOUT_HEAVY_SEC)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
     return _sanitize(result)
 
 
 @app.get("/api/analysis/{dataset_id}/motifs")
-async def api_motifs(dataset_id: str):
+async def api_motifs(dataset_id: str, subset: Optional[str] = Query(None)):
     """Enumerate network motifs (3-node subgraph patterns)."""
     # 3-node motif enumeration is O(V³) on the connectivity graph — tightest cap
-    data, _ = _get_dataset_capped(dataset_id, max_spikes=10_000)
+    data, _ = _get_dataset_capped(dataset_id, max_spikes=10_000, subset=subset)
     t0 = time.time()
-    result = await _run_heavy(enumerate_motifs, data)
+    result = await _run_heavy(enumerate_motifs, data, timeout_sec=_TIMEOUT_HEAVY_SEC)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
     return _sanitize(result)
 
@@ -1378,14 +1387,14 @@ async def api_design_stimulus(dataset_id: str, generations: int = 15, population
 
 
 @app.get("/api/analysis/{dataset_id}/consciousness")
-async def api_consciousness(dataset_id: str):
+async def api_consciousness(dataset_id: str, subset: Optional[str] = Query(None)):
     """Composite consciousness assessment score.
     Internally calls IIT Phi (O(2^N)) + perturbational complexity +
     transfer entropy — tightest cap of any endpoint because all three
     heavyweights compound."""
-    data, _ = _get_dataset_capped(dataset_id, max_spikes=20_000)
+    data, _ = _get_dataset_capped(dataset_id, max_spikes=20_000, subset=subset)
     t0 = time.time()
-    result = await _run_heavy(compute_consciousness_score, data)
+    result = await _run_heavy(compute_consciousness_score, data, timeout_sec=_TIMEOUT_VERY_HEAVY_SEC)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
     return _sanitize(result)
 
@@ -1808,11 +1817,11 @@ async def api_funding_grant_detail(grant_id: str):
 # ═══════════ COMPUTATION & AI ═══════════
 
 @app.get("/api/analysis/{dataset_id}/turing-test")
-async def api_turing_test(dataset_id: str):
+async def api_turing_test(dataset_id: str, subset: Optional[str] = Query(None)):
     """Run organoid Turing test — compare real data vs Poisson and LIF models."""
-    data, _ = _get_dataset_capped(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id, subset=subset)
     t0 = time.time()
-    result = await _run_heavy(run_turing_test, data)
+    result = await _run_heavy(run_turing_test, data, timeout_sec=_TIMEOUT_VERY_HEAVY_SEC)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
     return _sanitize(result)
 
@@ -1840,11 +1849,11 @@ async def api_hybrid_benchmark(dataset_id: str):
 # ═══════════ LEARNING & MEMORY ═══════════
 
 @app.get("/api/analysis/{dataset_id}/forgetting")
-async def api_forgetting(dataset_id: str):
+async def api_forgetting(dataset_id: str, subset: Optional[str] = Query(None)):
     """Measure catastrophic forgetting — do early patterns survive?"""
-    data, _ = _get_dataset_capped(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id, subset=subset)
     t0 = time.time()
-    result = await _run_heavy(compute_retention_curve, data)
+    result = await _run_heavy(compute_retention_curve, data, timeout_sec=_TIMEOUT_HEAVY_SEC)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
     return _sanitize(result)
 
@@ -1984,11 +1993,11 @@ async def api_evolve_programs(dataset_id: str, generations: int = 20):
 
 
 @app.get("/api/analysis/{dataset_id}/homeostasis")
-async def api_homeostasis(dataset_id: str):
+async def api_homeostasis(dataset_id: str, subset: Optional[str] = Query(None)):
     """Monitor homeostatic plasticity — firing rate self-regulation."""
-    data, _ = _get_dataset_capped(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id, subset=subset)
     t0 = time.time()
-    result = await _run_heavy(monitor_homeostasis, data)
+    result = await _run_heavy(monitor_homeostasis, data, timeout_sec=_TIMEOUT_HEAVY_SEC)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
     return _sanitize(result)
 
@@ -2311,20 +2320,72 @@ def _get_dataset(dataset_id: str) -> SpikeData:
 # transfer-entropy, motifs, information-flow override this further down.
 _MAX_SPIKES_HEAVY = 20_000
 
-def _get_dataset_capped(dataset_id: str, max_spikes: int = _MAX_SPIKES_HEAVY) -> tuple[SpikeData, bool]:
-    """Get dataset, auto-subsampling if too large for heavy analysis.
-    Returns (data, was_subsampled).
-    Uses time-range subsetting to preserve temporal structure (not random sampling)."""
+
+# Subset presets — user-selectable time ranges for heavy analyses.
+# FinalSpark is 118h; 1h gives ~22K spikes (fast), 10h ~220K (slower but
+# richer), full is everything (bounded further by max_spikes cap).
+_SUBSET_PRESETS = {
+    "1h": 3600.0,
+    "10h": 36000.0,
+    "full": None,
+}
+
+
+def _parse_subset(subset: Optional[str]) -> Optional[float]:
+    """Parse subset query param to seconds. Returns None for 'full' / unrecognized."""
+    if not subset:
+        return None
+    subset = subset.strip().lower()
+    if subset in _SUBSET_PRESETS:
+        return _SUBSET_PRESETS[subset]
+    # Free-form: accept numeric seconds ("3600") or "Nh"/"Nmin"/"Ns"
+    try:
+        if subset.endswith("h"):
+            return float(subset[:-1]) * 3600.0
+        if subset.endswith("min"):
+            return float(subset[:-3]) * 60.0
+        if subset.endswith("s"):
+            return float(subset[:-1])
+        return float(subset)
+    except ValueError:
+        return None
+
+
+def _get_dataset_capped(
+    dataset_id: str,
+    max_spikes: int = _MAX_SPIKES_HEAVY,
+    subset: Optional[str] = None,
+) -> tuple[SpikeData, bool]:
+    """Get dataset, optionally slicing to a user-requested time range, then
+    auto-subsampling if still too large.
+
+    Order of operations:
+      1. User's `subset` preset narrows the time window first (if provided).
+      2. `max_spikes` cap enforces an upper bound on what the algorithm sees.
+
+    Returns (data, was_subsampled). was_subsampled is True if EITHER step
+    reduced the data — frontend shows a "subsampled" badge in both cases.
+    """
     data = _get_dataset(dataset_id)
+    was_subsampled = False
+
+    # Step 1: honour user-requested time slice
+    subset_duration = _parse_subset(subset)
+    if subset_duration is not None and subset_duration < data.duration:
+        t_start = data.time_range[0]
+        data = data.get_time_range(t_start, t_start + subset_duration)
+        was_subsampled = True
+
     if data.n_spikes <= max_spikes:
-        return data, False
+        return data, was_subsampled
+
+    # Step 2: safety cap if still over max_spikes
     # Find time cutoff that gives approximately max_spikes
-    # Estimate: rate = n_spikes / duration, target_duration = max_spikes / rate
     rate = data.n_spikes / max(data.duration, 1)
     target_duration = max_spikes / max(rate, 0.001)
     t_start = data.time_range[0]
-    subset = data.get_time_range(t_start, t_start + target_duration)
-    return subset, True
+    subset_data = data.get_time_range(t_start, t_start + target_duration)
+    return subset_data, True
 
 
 if __name__ == "__main__":
