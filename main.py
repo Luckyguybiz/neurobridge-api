@@ -1199,9 +1199,10 @@ async def api_design_stimulus(dataset_id: str, generations: int = 15, population
 @app.get("/api/analysis/{dataset_id}/consciousness")
 async def api_consciousness(dataset_id: str):
     """Composite consciousness assessment score.
-    Calls integrated information + state-space + predictive coding internally,
-    so it's one of the heaviest endpoints — use the tight cap."""
-    data, _ = _get_dataset_capped(dataset_id, max_spikes=50_000)
+    Internally calls IIT Phi (O(2^N)) + perturbational complexity +
+    transfer entropy — tightest cap of any endpoint because all three
+    heavyweights compound."""
+    data, _ = _get_dataset_capped(dataset_id, max_spikes=20_000)
     t0 = time.time()
     result = await _run_heavy(compute_consciousness_score, data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
