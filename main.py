@@ -991,7 +991,8 @@ async def analyze_cross_correlation(
 ):
     """Pairwise cross-correlograms between all electrodes."""
     import asyncio
-    data, subsampled = _get_dataset_capped(dataset_id, max_spikes=10_000, subset=subset)
+    # O(pairs × lag_bins) — 600s duration cap stays comfortably under timeout
+    data, subsampled = _get_dataset_capped(dataset_id, max_spikes=10_000, subset=subset, max_duration_sec=600)
     raw = await _run_heavy(compute_cross_correlation, data, max_lag_ms, bin_size_ms, timeout_sec=_TIMEOUT_HEAVY_SEC)
     result = _sanitize(raw)
     if subsampled:
@@ -1006,10 +1007,14 @@ async def analyze_transfer_entropy(
     history_bins: int = Query(5, ge=1, le=20),
     subset: Optional[str] = Query(None),
 ):
-    """Transfer entropy — directional information flow between electrodes."""
+    """Transfer entropy — directional information flow between electrodes.
+
+    TE complexity = PAIRS × BINS × HISTORY² = 1024 × (duration_s/bin_size) × 25.
+    Clamp duration at 300s so 1h subset still completes: 1024 × 60K × 25 =
+    1.5B ops, runs in <30s. Without the cap, 3600s duration pushed to 240s+.
+    """
     import asyncio
-    # 32² pairs × history_bins discrete states — tightest cap in this group
-    data, subsampled = _get_dataset_capped(dataset_id, max_spikes=10_000, subset=subset)
+    data, subsampled = _get_dataset_capped(dataset_id, max_spikes=10_000, subset=subset, max_duration_sec=300)
     raw = await _run_heavy(compute_transfer_entropy, data, bin_size_ms, history_bins, timeout_sec=_TIMEOUT_VERY_HEAVY_SEC)
     result = _sanitize(raw)
     if subsampled:
@@ -1233,7 +1238,8 @@ async def analyze_rhythms(dataset_id: str):
 async def analyze_emergence(dataset_id: str, subset: Optional[str] = Query(None)):
     """Compute integrated information (Phi) and causal emergence."""
     import asyncio
-    data, _ = _get_dataset_capped(dataset_id, max_spikes=20_000, subset=subset)  # IIT Phi is O(2^N), needs small dataset
+    # IIT Phi is O(2^N electrodes), mostly sensitive to duration via bin count
+    data, _ = _get_dataset_capped(dataset_id, max_spikes=20_000, subset=subset, max_duration_sec=300)
     return _sanitize(await _run_heavy(compute_integrated_information, data, timeout_sec=_TIMEOUT_VERY_HEAVY_SEC))
 
 
@@ -1273,8 +1279,8 @@ async def analyze_predictive_coding(dataset_id: str, subset: Optional[str] = Que
 @app.get("/api/analysis/{dataset_id}/weights")
 async def analyze_weights(dataset_id: str, subset: Optional[str] = Query(None)):
     """Infer synaptic weight matrix from spike timing."""
-    # O(N²) pairwise correlation — tightest cap
-    data, _ = _get_dataset_capped(dataset_id, max_spikes=10_000, subset=subset)
+    # O(N²) pairwise correlation, 300s duration cap keeps 1h subset tractable
+    data, _ = _get_dataset_capped(dataset_id, max_spikes=10_000, subset=subset, max_duration_sec=300)
     return _sanitize(await _run_heavy(infer_synaptic_weights, data, timeout_sec=_TIMEOUT_HEAVY_SEC))
 
 
@@ -1282,8 +1288,8 @@ async def analyze_weights(dataset_id: str, subset: Optional[str] = Query(None)):
 async def analyze_weight_tracking(dataset_id: str, window_sec: float = Query(30.0), subset: Optional[str] = Query(None)):
     """Track synaptic weight changes over time — watch learning happen."""
     try:
-        # O(N²) per-window — tightest cap because windows multiply the work
-        data, _ = _get_dataset_capped(dataset_id, max_spikes=10_000, subset=subset)
+        # O(N²) per-window × N windows — 600s cap (20 windows of 30s) keeps tractable
+        data, _ = _get_dataset_capped(dataset_id, max_spikes=10_000, subset=subset, max_duration_sec=600)
         return _sanitize(await _run_heavy(track_weight_changes, data, window_sec=window_sec, timeout_sec=_TIMEOUT_HEAVY_SEC))
     except Exception as e:
         return {"error": str(e), "partial": True}
@@ -1292,7 +1298,8 @@ async def analyze_weight_tracking(dataset_id: str, window_sec: float = Query(30.
 @app.get("/api/analysis/{dataset_id}/multiscale")
 async def analyze_multiscale(dataset_id: str, subset: Optional[str] = Query(None)):
     """Multi-timescale complexity analysis — find operating frequency."""
-    data, _ = _get_dataset_capped(dataset_id, subset=subset)
+    # Iterates over multiple bin scales; 600s duration keeps under 90s even with 6-8 scales
+    data, _ = _get_dataset_capped(dataset_id, subset=subset, max_duration_sec=600)
     return _sanitize(await _run_heavy(compute_multiscale_complexity, data, timeout_sec=_TIMEOUT_HEAVY_SEC))
 
 
@@ -1302,7 +1309,8 @@ async def analyze_multiscale(dataset_id: str, subset: Optional[str] = Query(None
 async def full_report(dataset_id: str, subset: Optional[str] = Query(None)):
     """Run ALL 21 analyses and generate comprehensive report."""
     import asyncio
-    data, subsampled = _get_dataset_capped(dataset_id, subset=subset)
+    # Full report chains 21 analyses; must stay under 240s — clamp duration to 180s
+    data, subsampled = _get_dataset_capped(dataset_id, subset=subset, max_duration_sec=180)
     report = await _run_heavy(generate_full_report, data, timeout_sec=_TIMEOUT_VERY_HEAVY_SEC)
     report = _sanitize(report)
     if subsampled:
@@ -1336,7 +1344,8 @@ async def api_habituation(dataset_id: str, subset: Optional[str] = Query(None)):
 @app.get("/api/analysis/{dataset_id}/metastability")
 async def api_metastability(dataset_id: str, subset: Optional[str] = Query(None)):
     """Analyze metastability — brain-like state switching dynamics."""
-    data, _ = _get_dataset_capped(dataset_id, subset=subset)
+    # Kuramoto computation previously took 406s on full FinalSpark — clamp to 5min
+    data, _ = _get_dataset_capped(dataset_id, subset=subset, max_duration_sec=300)
     t0 = time.time()
     result = await _run_heavy(analyze_metastability, data, timeout_sec=_TIMEOUT_VERY_HEAVY_SEC)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
@@ -1391,8 +1400,9 @@ async def api_consciousness(dataset_id: str, subset: Optional[str] = Query(None)
     """Composite consciousness assessment score.
     Internally calls IIT Phi (O(2^N)) + perturbational complexity +
     transfer entropy — tightest cap of any endpoint because all three
-    heavyweights compound."""
-    data, _ = _get_dataset_capped(dataset_id, max_spikes=20_000, subset=subset)
+    heavyweights compound. 300s duration cap keeps 1h subset tractable
+    (IIT alone on full 1h slice has never returned)."""
+    data, _ = _get_dataset_capped(dataset_id, max_spikes=20_000, subset=subset, max_duration_sec=300)
     t0 = time.time()
     result = await _run_heavy(compute_consciousness_score, data, timeout_sec=_TIMEOUT_VERY_HEAVY_SEC)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
@@ -1819,7 +1829,8 @@ async def api_funding_grant_detail(grant_id: str):
 @app.get("/api/analysis/{dataset_id}/turing-test")
 async def api_turing_test(dataset_id: str, subset: Optional[str] = Query(None)):
     """Run organoid Turing test — compare real data vs Poisson and LIF models."""
-    data, _ = _get_dataset_capped(dataset_id, subset=subset)
+    # Internally runs LIF simulation + statistical tests — clamp to 5min
+    data, _ = _get_dataset_capped(dataset_id, subset=subset, max_duration_sec=300)
     t0 = time.time()
     result = await _run_heavy(run_turing_test, data, timeout_sec=_TIMEOUT_VERY_HEAVY_SEC)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
@@ -2355,16 +2366,22 @@ def _get_dataset_capped(
     dataset_id: str,
     max_spikes: int = _MAX_SPIKES_HEAVY,
     subset: Optional[str] = None,
+    max_duration_sec: Optional[float] = None,
 ) -> tuple[SpikeData, bool]:
     """Get dataset, optionally slicing to a user-requested time range, then
     auto-subsampling if still too large.
 
     Order of operations:
       1. User's `subset` preset narrows the time window first (if provided).
-      2. `max_spikes` cap enforces an upper bound on what the algorithm sees.
+      2. `max_duration_sec` enforces a hard upper bound on duration — some
+         algorithms (transfer-entropy, consciousness, weights) scale with
+         BINS × PAIRS, so duration matters more than spike count. A 1h slice
+         with 5ms bins = 720K bins × 1024 pairs which never completes. Cap
+         at 300s for those endpoints via max_duration_sec=300.
+      3. `max_spikes` cap enforces an upper bound on what the algorithm sees.
 
-    Returns (data, was_subsampled). was_subsampled is True if EITHER step
-    reduced the data — frontend shows a "subsampled" badge in both cases.
+    Returns (data, was_subsampled). was_subsampled is True if ANY step
+    reduced the data — frontend shows a "subsampled" badge in all cases.
     """
     data = _get_dataset(dataset_id)
     was_subsampled = False
@@ -2376,10 +2393,16 @@ def _get_dataset_capped(
         data = data.get_time_range(t_start, t_start + subset_duration)
         was_subsampled = True
 
+    # Step 2: enforce endpoint-specific duration cap
+    if max_duration_sec is not None and data.duration > max_duration_sec:
+        t_start = data.time_range[0]
+        data = data.get_time_range(t_start, t_start + max_duration_sec)
+        was_subsampled = True
+
     if data.n_spikes <= max_spikes:
         return data, was_subsampled
 
-    # Step 2: safety cap if still over max_spikes
+    # Step 3: safety cap if still over max_spikes
     # Find time cutoff that gives approximately max_spikes
     rate = data.n_spikes / max(data.duration, 1)
     target_duration = max_spikes / max(rate, 0.001)
