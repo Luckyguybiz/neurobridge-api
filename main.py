@@ -673,8 +673,8 @@ async def analyze_summary(dataset_id: str):
 @app.get("/api/analysis/{dataset_id}/quality")
 async def analyze_quality(dataset_id: str):
     """Data quality assessment — SNR, violations, gaps, issues."""
-    data = _get_dataset(dataset_id)
-    return compute_quality_metrics(data)
+    data, _ = _get_dataset_capped(dataset_id)
+    return await _run_heavy(compute_quality_metrics, data)
 
 
 @app.get("/api/analysis/{dataset_id}/firing-rates")
@@ -699,15 +699,15 @@ async def analyze_isi(
     electrode: Optional[int] = None,
 ):
     """Inter-spike interval analysis."""
-    data = _get_dataset(dataset_id)
-    return compute_isi(data, electrode=electrode)
+    data, _ = _get_dataset_capped(dataset_id)
+    return await _run_heavy(compute_isi, data, electrode=electrode)
 
 
 @app.get("/api/analysis/{dataset_id}/amplitudes")
 async def analyze_amplitudes(dataset_id: str):
     """Amplitude distribution statistics per electrode."""
-    data = _get_dataset(dataset_id)
-    return compute_amplitude_stats(data)
+    data, _ = _get_dataset_capped(dataset_id)
+    return await _run_heavy(compute_amplitude_stats, data)
 
 
 @app.get("/api/analysis/{dataset_id}/temporal")
@@ -779,10 +779,12 @@ async def analyze_single_channel_bursts(
     min_spikes: int = Query(3),
 ):
     """Single-channel burst detection using ISI method."""
-    data = _get_dataset(dataset_id)
-    spike_times = data.times[data.electrodes == electrode]
-    bursts = detect_single_channel_bursts(spike_times, max_isi_ms=max_isi_ms, min_spikes=min_spikes)
-    return {"electrode": electrode, "bursts": bursts, "n_bursts": len(bursts)}
+    data, _ = _get_dataset_capped(dataset_id)
+    def _compute():
+        spike_times = data.times[data.electrodes == electrode]
+        bursts = detect_single_channel_bursts(spike_times, max_isi_ms=max_isi_ms, min_spikes=min_spikes)
+        return {"electrode": electrode, "bursts": bursts, "n_bursts": len(bursts)}
+    return await _run_heavy(_compute)
 
 
 @app.get("/api/analysis/{dataset_id}/connectivity")
@@ -849,19 +851,23 @@ async def analyze_transfer_entropy(
 @app.get("/api/analysis/{dataset_id}/entropy")
 async def analyze_entropy(dataset_id: str, bin_size_ms: float = Query(10.0)):
     """Shannon entropy of spike trains per electrode."""
-    return compute_spike_train_entropy(_get_dataset(dataset_id), bin_size_ms=bin_size_ms)
+    data, _ = _get_dataset_capped(dataset_id)
+    return await _run_heavy(compute_spike_train_entropy, data, bin_size_ms=bin_size_ms)
 
 
 @app.get("/api/analysis/{dataset_id}/mutual-information")
 async def analyze_mutual_info(dataset_id: str, bin_size_ms: float = Query(10.0)):
     """Pairwise mutual information between electrodes."""
-    return compute_mutual_information(_get_dataset(dataset_id), bin_size_ms=bin_size_ms)
+    # Pairwise O(N²) — tighter cap
+    data, _ = _get_dataset_capped(dataset_id, max_spikes=50_000)
+    return await _run_heavy(compute_mutual_information, data, bin_size_ms=bin_size_ms)
 
 
 @app.get("/api/analysis/{dataset_id}/complexity")
 async def analyze_complexity(dataset_id: str, bin_size_ms: float = Query(5.0)):
     """Lempel-Ziv complexity of spike trains."""
-    return compute_lempel_ziv_complexity(_get_dataset(dataset_id), bin_size_ms=bin_size_ms)
+    data, _ = _get_dataset_capped(dataset_id)
+    return await _run_heavy(compute_lempel_ziv_complexity, data, bin_size_ms=bin_size_ms)
 
 
 # ═══════════ SPECTRAL ═══════════
@@ -869,13 +875,16 @@ async def analyze_complexity(dataset_id: str, bin_size_ms: float = Query(5.0)):
 @app.get("/api/analysis/{dataset_id}/power-spectrum")
 async def analyze_power_spectrum(dataset_id: str, bin_size_ms: float = Query(1.0)):
     """Power spectral density and frequency band analysis."""
-    return compute_power_spectrum(_get_dataset(dataset_id), bin_size_ms=bin_size_ms)
+    data, _ = _get_dataset_capped(dataset_id)
+    return await _run_heavy(compute_power_spectrum, data, bin_size_ms=bin_size_ms)
 
 
 @app.get("/api/analysis/{dataset_id}/coherence")
 async def analyze_coherence(dataset_id: str, bin_size_ms: float = Query(1.0)):
     """Spectral coherence between electrode pairs."""
-    return compute_coherence(_get_dataset(dataset_id), bin_size_ms=bin_size_ms)
+    # Pairwise spectral — tighter cap
+    data, _ = _get_dataset_capped(dataset_id, max_spikes=50_000)
+    return await _run_heavy(compute_coherence, data, bin_size_ms=bin_size_ms)
 
 
 # ═══════════ CRITICALITY ═══════════
@@ -883,7 +892,8 @@ async def analyze_coherence(dataset_id: str, bin_size_ms: float = Query(1.0)):
 @app.get("/api/analysis/{dataset_id}/avalanches")
 async def analyze_avalanches(dataset_id: str, bin_size_ms: float = Query(5.0)):
     """Neuronal avalanche detection and criticality assessment."""
-    return _sanitize(detect_avalanches(_get_dataset(dataset_id), bin_size_ms=bin_size_ms))
+    data, _ = _get_dataset_capped(dataset_id)
+    return _sanitize(await _run_heavy(detect_avalanches, data, bin_size_ms=bin_size_ms))
 
 
 # ═══════════ DIGITAL TWIN ═══════════
@@ -891,17 +901,20 @@ async def analyze_avalanches(dataset_id: str, bin_size_ms: float = Query(5.0)):
 @app.get("/api/analysis/{dataset_id}/digital-twin/fit")
 async def fit_twin(dataset_id: str):
     """Fit LIF neuron model parameters from recorded data."""
-    return fit_lif_parameters(_get_dataset(dataset_id))
+    data, _ = _get_dataset_capped(dataset_id)
+    return await _run_heavy(fit_lif_parameters, data)
 
 
 @app.post("/api/analysis/{dataset_id}/digital-twin/simulate")
 async def simulate_twin(dataset_id: str, duration_ms: float = Query(5000.0)):
     """Simulate digital twin and compare with real data."""
-    data = _get_dataset(dataset_id)
-    params = fit_lif_parameters(data)
-    sim = simulate_lif_network(params, duration_ms=duration_ms)
-    comparison = compare_real_vs_simulated(data, sim)
-    return {"simulation": sim, "comparison": comparison, "parameters": params}
+    data, _ = _get_dataset_capped(dataset_id)
+    def _compute():
+        params = fit_lif_parameters(data)
+        sim = simulate_lif_network(params, duration_ms=duration_ms)
+        comparison = compare_real_vs_simulated(data, sim)
+        return {"simulation": sim, "comparison": comparison, "parameters": params}
+    return await _run_heavy(_compute)
 
 
 # ═══════════ ML PIPELINE ═══════════
@@ -909,25 +922,29 @@ async def simulate_twin(dataset_id: str, duration_ms: float = Query(5000.0)):
 @app.get("/api/analysis/{dataset_id}/anomalies")
 async def analyze_anomalies(dataset_id: str, window_sec: float = Query(1.0)):
     """Anomaly detection using Isolation Forest."""
-    return detect_anomalies(_get_dataset(dataset_id), window_sec=window_sec)
+    data, _ = _get_dataset_capped(dataset_id)
+    return await _run_heavy(detect_anomalies, data, window_sec=window_sec)
 
 
 @app.get("/api/analysis/{dataset_id}/states")
 async def analyze_states(dataset_id: str, window_sec: float = Query(2.0)):
     """Neural activity state classification (resting, active, bursting)."""
-    return classify_states(_get_dataset(dataset_id), window_sec=window_sec)
+    data, _ = _get_dataset_capped(dataset_id)
+    return await _run_heavy(classify_states, data, window_sec=window_sec)
 
 
 @app.get("/api/analysis/{dataset_id}/pca")
 async def analyze_pca(dataset_id: str, n_components: int = Query(3)):
     """PCA embedding of neural state space."""
-    return compute_pca_embedding(_get_dataset(dataset_id), n_components=n_components)
+    data, _ = _get_dataset_capped(dataset_id)
+    return await _run_heavy(compute_pca_embedding, data, n_components=n_components)
 
 
 @app.get("/api/analysis/{dataset_id}/features")
 async def analyze_features(dataset_id: str, window_sec: float = Query(1.0)):
     """Extract multi-scale features from spike data."""
-    return extract_features(_get_dataset(dataset_id), window_sec=window_sec)
+    data, _ = _get_dataset_capped(dataset_id)
+    return await _run_heavy(extract_features, data, window_sec=window_sec)
 
 
 # ═══════════ PLASTICITY & LEARNING ═══════════
@@ -962,13 +979,15 @@ async def analyze_iq(dataset_id: str):
 @app.get("/api/analysis/{dataset_id}/predict/firing-rates")
 async def predict_rates(dataset_id: str, forecast_sec: float = Query(300.0)):
     """Predict future firing rates with confidence intervals."""
-    return _sanitize(predict_firing_rates(_get_dataset(dataset_id), forecast_sec=forecast_sec))
+    data, _ = _get_dataset_capped(dataset_id)
+    return _sanitize(await _run_heavy(predict_firing_rates, data, forecast_sec=forecast_sec))
 
 
 @app.get("/api/analysis/{dataset_id}/predict/bursts")
 async def predict_bursts(dataset_id: str, window_sec: float = Query(10.0)):
     """Predict burst probability in next time window."""
-    return _sanitize(predict_burst_probability(_get_dataset(dataset_id), window_sec=window_sec))
+    data, _ = _get_dataset_capped(dataset_id)
+    return _sanitize(await _run_heavy(predict_burst_probability, data, window_sec=window_sec))
 
 
 @app.get("/api/analysis/{dataset_id}/health")
