@@ -1295,7 +1295,7 @@ async def api_closed_loop(
     """Run DishBrain-style closed-loop session (pong or cartpole)."""
     data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
-    result = run_dishbrain_session(data, n_episodes=n_episodes, reward_strategy=reward_strategy, game=game)
+    result = await _run_heavy(run_dishbrain_session, data, n_episodes=n_episodes, reward_strategy=reward_strategy, game=game)
     result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
     return _sanitize(result)
 
@@ -1309,7 +1309,7 @@ async def api_cartpole(
     """CartPole benchmark adapted for biological neural networks."""
     data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
-    result = run_cartpole_benchmark(data, n_trials=n_trials, reward_strategy=reward_strategy)
+    result = await _run_heavy(run_cartpole_benchmark, data, n_trials=n_trials, reward_strategy=reward_strategy)
     result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
     return _sanitize(result)
 
@@ -1331,7 +1331,7 @@ async def api_curriculum(dataset_id: str):
     """Run full 4-stage adaptive curriculum learning protocol."""
     data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
-    result = run_curriculum(data)
+    result = await _run_heavy(run_curriculum, data)
     result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
     return _sanitize(result)
 
@@ -1352,7 +1352,7 @@ async def api_curriculum_simulate(
     """Simulate a single curriculum stage with trial-by-trial output."""
     data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
-    result = simulate_stage(data, stage=stage, n_trials=n_trials)
+    result = await _run_heavy(simulate_stage, data, stage=stage, n_trials=n_trials)
     result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
     return _sanitize(result)
 
@@ -1364,7 +1364,7 @@ async def api_memory_battery(dataset_id: str):
     """Run complete memory battery: working + short-term + long-term + associative."""
     data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
-    result = run_memory_battery(data)
+    result = await _run_heavy(run_memory_battery, data)
     result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
     return _sanitize(result)
 
@@ -1410,7 +1410,7 @@ async def api_pong(
     """Simulate N games of Pong using organoid spike data as controller."""
     data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
-    result = simulate_pong(data, n_games=n_games, encoding=encoding, decoding=decoding, reward_rule=reward_rule)
+    result = await _run_heavy(simulate_pong, data, n_games=n_games, encoding=encoding, decoding=decoding, reward_rule=reward_rule)
     result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
     return _sanitize(result)
 
@@ -1439,7 +1439,7 @@ async def api_xor_benchmark(
     """Run full logical gate benchmark suite (AND, OR, XOR, NAND, XNOR)."""
     data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
-    result = run_full_benchmark(data, n_trials_per_gate=n_trials_per_gate, readout=readout)
+    result = await _run_heavy(run_full_benchmark, data, n_trials_per_gate=n_trials_per_gate, readout=readout)
     result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
     return _sanitize(result)
 
@@ -1454,7 +1454,7 @@ async def api_xor_gate(
     """Run a single logical gate benchmark."""
     data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
-    result = run_gate_benchmark(data, gate=gate.upper(), n_trials=n_trials, readout=readout)
+    result = await _run_heavy(run_gate_benchmark, data, gate=gate.upper(), n_trials=n_trials, readout=readout)
     result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
     return _sanitize(result)
 
@@ -1575,7 +1575,7 @@ async def api_publish_draft(dataset_id: str):
     """Generate full paper draft (title, abstract, methods, results, discussion)."""
     data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
-    result = generate_draft(data, analyses={})
+    result = await _run_heavy(generate_draft, data, analyses={})
     result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
     return _sanitize(result)
 
@@ -1669,7 +1669,7 @@ async def api_turing_test(dataset_id: str):
     """Run organoid Turing test — compare real data vs Poisson and LIF models."""
     data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
-    result = run_turing_test(data)
+    result = await _run_heavy(run_turing_test, data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
     return _sanitize(result)
 
@@ -1689,7 +1689,7 @@ async def api_hybrid_benchmark(dataset_id: str):
     """Benchmark hybrid bio-digital AI vs pure digital vs pure biological."""
     data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
-    result = benchmark_hybrid(data)
+    result = await _run_heavy(benchmark_hybrid, data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
     return _sanitize(result)
 
@@ -1701,7 +1701,7 @@ async def api_forgetting(dataset_id: str):
     """Measure catastrophic forgetting — do early patterns survive?"""
     data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
-    result = compute_retention_curve(data)
+    result = await _run_heavy(compute_retention_curve, data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
     return _sanitize(result)
 
@@ -1711,7 +1711,7 @@ async def api_channel_capacity(dataset_id: str):
     """Estimate information channel capacity (multi-bit memory)."""
     data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
-    result = estimate_channel_capacity(data)
+    result = await _run_heavy(estimate_channel_capacity, data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
     return _sanitize(result)
 
@@ -1721,7 +1721,7 @@ async def api_population_codes(dataset_id: str):
     """Measure population code diversity (distinct neural states)."""
     data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
-    result = measure_population_code_diversity(data)
+    result = await _run_heavy(measure_population_code_diversity, data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
     return _sanitize(result)
 
@@ -1731,7 +1731,7 @@ async def api_topology(dataset_id: str):
     """Compute Betti numbers (topological data analysis)."""
     data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
-    result = compute_betti_numbers(data)
+    result = await _run_heavy(compute_betti_numbers, data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
     return _sanitize(result)
 
@@ -1741,7 +1741,7 @@ async def api_topo_complexity(dataset_id: str):
     """Compute topological complexity score."""
     data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
-    result = compute_topological_complexity(data)
+    result = await _run_heavy(compute_topological_complexity, data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
     return _sanitize(result)
 
@@ -1751,7 +1751,7 @@ async def api_consolidation(dataset_id: str):
     """Detect memory consolidation events during offline periods."""
     data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
-    result = detect_consolidation_events(data)
+    result = await _run_heavy(detect_consolidation_events, data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
     return _sanitize(result)
 
@@ -1761,7 +1761,7 @@ async def api_transfer(dataset_id: str):
     """Measure transfer learning between recording segments."""
     data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
-    result = measure_transfer(data)
+    result = await _run_heavy(measure_transfer, data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
     return _sanitize(result)
 
@@ -1771,7 +1771,7 @@ async def api_rsa(dataset_id: str):
     """Representational Similarity Analysis."""
     data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
-    result = compute_representational_similarity(data)
+    result = await _run_heavy(compute_representational_similarity, data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
     return _sanitize(result)
 
@@ -1783,7 +1783,7 @@ async def api_connectome(dataset_id: str):
     """Build full functional connectome with graph theory metrics."""
     data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
-    result = build_full_connectome(data)
+    result = await _run_heavy(build_full_connectome, data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
     return _sanitize(result)
 
@@ -1793,7 +1793,7 @@ async def api_communities(dataset_id: str):
     """Detect network communities (modules) via spectral clustering."""
     data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
-    result = detect_communities(data)
+    result = await _run_heavy(detect_communities, data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
     return _sanitize(result)
 
@@ -1803,7 +1803,7 @@ async def api_graph_theory(dataset_id: str):
     """Compute rich-club, small-world, efficiency, betweenness centrality."""
     data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
-    result = compute_graph_theory_metrics(data)
+    result = await _run_heavy(compute_graph_theory_metrics, data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
     return _sanitize(result)
 
@@ -1813,7 +1813,7 @@ async def api_effective_connectivity(dataset_id: str):
     """Estimate directed causal connections (effective connectivity)."""
     data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
-    result = estimate_effective_connectivity(data)
+    result = await _run_heavy(estimate_effective_connectivity, data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
     return _sanitize(result)
 
@@ -1823,7 +1823,7 @@ async def api_causal_hierarchy(dataset_id: str):
     """Order electrodes by causal influence hierarchy."""
     data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
-    result = compute_causal_hierarchy(data)
+    result = await _run_heavy(compute_causal_hierarchy, data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
     return _sanitize(result)
 
@@ -1835,7 +1835,7 @@ async def api_evolve_programs(dataset_id: str, generations: int = 20):
     """Genetic programming — evolve stimulation program trees."""
     data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
-    result = evolve_programs(data, generations=generations)
+    result = await _run_heavy(evolve_programs, data, generations=generations)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
     return _sanitize(result)
 
@@ -1845,7 +1845,7 @@ async def api_homeostasis(dataset_id: str):
     """Monitor homeostatic plasticity — firing rate self-regulation."""
     data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
-    result = monitor_homeostasis(data)
+    result = await _run_heavy(monitor_homeostasis, data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
     return _sanitize(result)
 
@@ -1855,7 +1855,7 @@ async def api_suffering(dataset_id: str):
     """Detect distress/suffering patterns — ethical monitoring."""
     data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
-    result = detect_suffering(data)
+    result = await _run_heavy(detect_suffering, data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
     return _sanitize(result)
 
@@ -1865,7 +1865,7 @@ async def api_welfare(dataset_id: str):
     """Generate comprehensive welfare report."""
     data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
-    result = generate_welfare_report(data)
+    result = await _run_heavy(generate_welfare_report, data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
     return _sanitize(result)
 
@@ -1875,7 +1875,7 @@ async def api_swarm(dataset_id: str, n_organoids: int = 4):
     """Simulate multi-organoid swarm intelligence."""
     data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
-    result = simulate_swarm(data, n_organoids=n_organoids)
+    result = await _run_heavy(simulate_swarm, data, n_organoids=n_organoids)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
     return _sanitize(result)
 
@@ -1885,7 +1885,7 @@ async def api_morphology(dataset_id: str):
     """Analyze morphological computing — structure vs function."""
     data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
-    result = analyze_morphological_computation(data)
+    result = await _run_heavy(analyze_morphological_computation, data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
     return _sanitize(result)
 
@@ -1989,7 +1989,7 @@ async def analyze_temporal_evolution(
     data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
     if mode == "trends":
-        result = detect_trends(data, window_sec=window_sec)
+        result = await _run_heavy(detect_trends, data, window_sec=window_sec)
     elif mode == "critical":
         result = find_critical_moments(data, window_sec=window_sec)
     else:
@@ -2019,7 +2019,7 @@ async def analyze_stim_response(
 
     if stim_times:
         stim_list = [float(t.strip()) for t in stim_times.split(",")]
-        result = detect_response(data, stim_times=stim_list, window_ms=window_ms)
+        result = await _run_heavy(detect_response, data, stim_times=stim_list, window_ms=window_ms)
     else:
         # Auto-detect stimulation times
         estimated = estimate_stim_times(data)
@@ -2052,7 +2052,7 @@ async def analyze_llm_optimize(
     """Run LLM-in-the-loop protocol optimization (simulated)."""
     data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
-    result = run_optimization_loop(data, n_iterations=n_iterations, objective=objective)
+    result = await _run_heavy(run_optimization_loop, data, n_iterations=n_iterations, objective=objective)
     result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
     return _sanitize(result)
 
@@ -2076,7 +2076,7 @@ async def protocol_dishbrain_pong(dataset_id: str, n_trials: int = Query(100)):
     """DishBrain Pong Protocol -- train organoid to play Pong via free energy principle."""
     data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
-    result = simulate_pong_game(data, n_trials=n_trials)
+    result = await _run_heavy(simulate_pong_game, data, n_trials=n_trials)
     result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
     return _sanitize(result)
 
@@ -2086,7 +2086,7 @@ async def protocol_brainoware(dataset_id: str, n_classes: int = Query(4), n_samp
     """Brainoware Reservoir Computing -- organoid as nonlinear reservoir for classification."""
     data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
-    result = simulate_reservoir_classification(data, n_classes=n_classes, n_samples=n_samples)
+    result = await _run_heavy(simulate_reservoir_classification, data, n_classes=n_classes, n_samples=n_samples)
     result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
     return _sanitize(result)
 
@@ -2096,7 +2096,7 @@ async def protocol_cartpole(dataset_id: str, n_episodes: int = Query(50), max_st
     """Cart-Pole Coaching -- balance inverted pendulum with adaptive coaching."""
     data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
-    result = simulate_cartpole(data, n_episodes=n_episodes, max_steps=max_steps)
+    result = await _run_heavy(simulate_cartpole, data, n_episodes=n_episodes, max_steps=max_steps)
     result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
     return _sanitize(result)
 
@@ -2106,7 +2106,7 @@ async def protocol_dopamine(dataset_id: str, n_trials: int = Query(100)):
     """Dopamine UV Reinforcement -- chemical reward via UV-activated dopamine release."""
     data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
-    result = simulate_dopamine_training(data, n_trials=n_trials)
+    result = await _run_heavy(simulate_dopamine_training, data, n_trials=n_trials)
     result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
     return _sanitize(result)
 
