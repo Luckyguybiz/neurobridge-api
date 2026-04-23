@@ -838,7 +838,8 @@ async def analyze_transfer_entropy(
 ):
     """Transfer entropy — directional information flow between electrodes."""
     import asyncio
-    data, subsampled = _get_dataset_capped(dataset_id, max_spikes=30_000)
+    # 32² pairs × history_bins discrete states — tightest cap in this group
+    data, subsampled = _get_dataset_capped(dataset_id, max_spikes=20_000)
     raw = await _run_heavy(compute_transfer_entropy, data, bin_size_ms, history_bins)
     result = _sanitize(raw)
     if subsampled:
@@ -1102,8 +1103,8 @@ async def analyze_predictive_coding(dataset_id: str):
 @app.get("/api/analysis/{dataset_id}/weights")
 async def analyze_weights(dataset_id: str):
     """Infer synaptic weight matrix from spike timing."""
-    # O(N²) pairwise correlation — tighter cap than default
-    data, _ = _get_dataset_capped(dataset_id, max_spikes=50_000)
+    # O(N²) pairwise correlation — tightest cap
+    data, _ = _get_dataset_capped(dataset_id, max_spikes=20_000)
     return _sanitize(await _run_heavy(infer_synaptic_weights, data))
 
 
@@ -1111,8 +1112,8 @@ async def analyze_weights(dataset_id: str):
 async def analyze_weight_tracking(dataset_id: str, window_sec: float = Query(30.0)):
     """Track synaptic weight changes over time — watch learning happen."""
     try:
-        # O(N²) per-window — tighter cap for sliding windows × pair correlation
-        data, _ = _get_dataset_capped(dataset_id, max_spikes=50_000)
+        # O(N²) per-window — tightest cap because windows multiply the work
+        data, _ = _get_dataset_capped(dataset_id, max_spikes=20_000)
         return _sanitize(await _run_heavy(track_weight_changes, data, window_sec=window_sec))
     except Exception as e:
         return {"error": str(e), "partial": True}
@@ -1175,8 +1176,8 @@ async def api_metastability(dataset_id: str):
 @app.get("/api/analysis/{dataset_id}/information-flow")
 async def api_information_flow(dataset_id: str):
     """Map directed information flow using Granger causality."""
-    # Granger is O(pairs × history) — keep the tighter pairwise cap
-    data, _ = _get_dataset_capped(dataset_id, max_spikes=50_000)
+    # Granger is O(pairs × history) — tight cap
+    data, _ = _get_dataset_capped(dataset_id, max_spikes=20_000)
     t0 = time.time()
     result = await _run_heavy(compute_granger_causality, data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
@@ -1186,8 +1187,8 @@ async def api_information_flow(dataset_id: str):
 @app.get("/api/analysis/{dataset_id}/motifs")
 async def api_motifs(dataset_id: str):
     """Enumerate network motifs (3-node subgraph patterns)."""
-    # 3-node motif enumeration is O(V³) on the connectivity graph — cap hard
-    data, _ = _get_dataset_capped(dataset_id, max_spikes=50_000)
+    # 3-node motif enumeration is O(V³) on the connectivity graph — tight cap
+    data, _ = _get_dataset_capped(dataset_id, max_spikes=20_000)
     t0 = time.time()
     result = await _run_heavy(enumerate_motifs, data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
