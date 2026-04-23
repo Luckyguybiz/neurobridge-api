@@ -328,6 +328,12 @@ async def global_exception_handler(request, exc):
 datasets: dict[str, SpikeData] = {}
 _MAX_DATASETS = 2  # Auto-evict oldest when exceeded (OOM protection)
 
+# Memory-based eviction thresholds. Without these, the count-based limit
+# (_MAX_DATASETS) is blind to actual RAM pressure — two small uploads of
+# 10MB each = fine, two loads of 2.6M FinalSpark + running analyses = OOM.
+_MEMORY_SOFT_LIMIT_PCT = 75.0   # Trigger gc + malloc_trim
+_MEMORY_HARD_LIMIT_PCT = 85.0   # Evict datasets even if under _MAX_DATASETS
+
 # Remember evicted dataset IDs (bounded set) so /get_dataset can return
 # 410 Gone instead of a confusing 404 — the frontend shows "your session
 # was replaced by another user's data" and offers to reload.
@@ -361,14 +367,93 @@ async def _run_heavy(func, *args, **kwargs):
                 detail=f"Analysis took longer than {int(_HEAVY_TIMEOUT_SEC)}s and was abandoned. Try a smaller dataset or a faster endpoint.",
             )
 
+
+# ─── Memory management helpers ───
+import gc as _gc
+import ctypes as _ctypes
+
+# glibc's malloc holds freed memory in per-thread arenas and doesn't return it
+# to the OS by default. This matters for long-running Python processes that
+# allocate + free large numpy arrays — the RSS grows monotonically even after
+# `del`. malloc_trim(0) walks the arenas and madvise(MADV_DONTNEED) unused
+# chunks, so the kernel can reclaim pages. Loaded lazily so we degrade
+# gracefully on non-glibc systems (e.g. macOS dev machines).
+try:
+    _libc = _ctypes.CDLL("libc.so.6")
+    _libc.malloc_trim.argtypes = [_ctypes.c_int]
+    _libc.malloc_trim.restype = _ctypes.c_int
+    _HAS_MALLOC_TRIM = True
+except (OSError, AttributeError):
+    _libc = None
+    _HAS_MALLOC_TRIM = False
+
+
+def _reclaim_memory(reason: str = "eviction") -> dict:
+    """Force GC + return freed pages to the OS. Returns before/after metrics."""
+    import psutil
+    proc = psutil.Process()
+    before_rss_mb = proc.memory_info().rss / 1024 / 1024
+    collected = _gc.collect()
+    trimmed = 0
+    if _HAS_MALLOC_TRIM:
+        trimmed = _libc.malloc_trim(0)
+    after_rss_mb = proc.memory_info().rss / 1024 / 1024
+    logger.info(
+        "memory.reclaim reason=%s collected=%d trimmed=%d rss_before=%.0fmb rss_after=%.0fmb delta=%+.0fmb",
+        reason, collected, trimmed, before_rss_mb, after_rss_mb, after_rss_mb - before_rss_mb,
+    )
+    return {
+        "reason": reason,
+        "gc_collected": collected,
+        "malloc_trim_ret": trimmed,
+        "rss_before_mb": round(before_rss_mb),
+        "rss_after_mb": round(after_rss_mb),
+        "delta_mb": round(after_rss_mb - before_rss_mb),
+    }
+
+
+def _current_memory_percent() -> float:
+    """System-wide memory usage %. Used for pressure-based eviction decisions."""
+    import psutil
+    return psutil.virtual_memory().percent
+
+
+def _evict_one_oldest(reason: str) -> Optional[str]:
+    """Remove oldest dataset and record it in evicted history. Returns evicted id or None."""
+    if not datasets:
+        return None
+    oldest_id = next(iter(datasets))
+    del datasets[oldest_id]
+    _evicted_ids.append(oldest_id)
+    if len(_evicted_ids) > _EVICTED_HISTORY:
+        _evicted_ids.pop(0)
+    logger.info("dataset.evict id=%s reason=%s remaining=%d", oldest_id, reason, len(datasets))
+    return oldest_id
+
+
 def _store_dataset(dataset_id: str, data: SpikeData) -> None:
-    """Store dataset with auto-eviction to prevent OOM."""
+    """Store dataset with auto-eviction to prevent OOM.
+
+    Two eviction triggers:
+      1. Count-based: len(datasets) >= _MAX_DATASETS
+      2. Memory-based: system RAM >= _MEMORY_HARD_LIMIT_PCT (85%)
+
+    After any eviction, we force GC + malloc_trim to actually return
+    freed pages to the OS. Without this, RSS grows unboundedly as glibc
+    holds arenas for reuse (classic Python long-runner pattern).
+    """
+    evicted_any = False
     while len(datasets) >= _MAX_DATASETS:
-        oldest_id = next(iter(datasets))
-        del datasets[oldest_id]
-        _evicted_ids.append(oldest_id)
-        if len(_evicted_ids) > _EVICTED_HISTORY:
-            _evicted_ids.pop(0)
+        if _evict_one_oldest("count_limit"):
+            evicted_any = True
+        else:
+            break
+    # Memory pressure check — evict even if count is OK
+    if _current_memory_percent() >= _MEMORY_HARD_LIMIT_PCT and datasets:
+        _evict_one_oldest("memory_pressure")
+        evicted_any = True
+    if evicted_any:
+        _reclaim_memory("post_eviction")
     datasets[dataset_id] = data
 
 
@@ -389,6 +474,9 @@ async def health_detailed():
     """Detailed health metrics — for monitoring dashboards, not public UI."""
     import psutil
     mem = psutil.virtual_memory()
+    swap = psutil.swap_memory()
+    proc = psutil.Process()
+    proc_mem = proc.memory_info()
     return {
         "status": "ok",
         "datasets_loaded": len(datasets),
@@ -399,8 +487,39 @@ async def health_detailed():
         "memory_used_mb": round(mem.used / 1024 / 1024),
         "memory_available_mb": round(mem.available / 1024 / 1024),
         "memory_percent": round(mem.percent, 1),
+        "swap_used_mb": round(swap.used / 1024 / 1024),
+        "swap_percent": round(swap.percent, 1),
+        "process_rss_mb": round(proc_mem.rss / 1024 / 1024),
+        "process_vms_mb": round(proc_mem.vms / 1024 / 1024),
+        "soft_limit_pct": _MEMORY_SOFT_LIMIT_PCT,
+        "hard_limit_pct": _MEMORY_HARD_LIMIT_PCT,
+        "malloc_trim_available": _HAS_MALLOC_TRIM,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
+
+
+@app.post("/api/_debug/reclaim-memory")
+async def debug_reclaim_memory():
+    """Operator endpoint: force gc.collect() + malloc_trim(0) and return diff.
+    Safe to call anytime — idempotent. Useful for investigating leaks."""
+    return _reclaim_memory("manual")
+
+
+@app.post("/api/_debug/evict-all")
+async def debug_evict_all():
+    """Operator endpoint: drop every loaded dataset and reclaim memory.
+    Use when memory is pinned and you want to force a clean state.
+    Frontend will get 410 on next fetch and gracefully re-upload."""
+    n_before = len(datasets)
+    evicted = list(datasets.keys())
+    for ds_id in evicted:
+        _evicted_ids.append(ds_id)
+    datasets.clear()
+    while len(_evicted_ids) > _EVICTED_HISTORY:
+        _evicted_ids.pop(0)
+    reclaim_stats = _reclaim_memory("manual_evict_all")
+    logger.warning("dataset.evict_all n=%d ids=%s", n_before, evicted[:5])
+    return {"evicted_count": n_before, **reclaim_stats}
 
 
 # ═══════════ DATA MANAGEMENT ═══════════
@@ -700,14 +819,38 @@ async def analyze_firing_rates(
     dataset_id: str,
     bin_size: float = Query(1.0, ge=0.1, le=60.0, description="Bin size in seconds"),
 ):
-    """Compute time-binned firing rates per electrode."""
+    """Compute time-binned firing rates per electrode.
+
+    Guards bin_size against explosive output shape. FinalSpark 2.6M spikes
+    over 118h with bin_size=0.1s = 4.2M bins × 32 electrodes = 1.1B floats
+    (8.7GB array). Auto-widen the bin for long recordings so the output stays
+    under ~5M cells and computation stays under the 45s heavy timeout.
+    """
     import asyncio
     data, subsampled = _get_dataset_capped(dataset_id, max_spikes=500_000)
+
+    # Adaptive bin guard: target max 150K time bins regardless of requested size.
+    # Far below the O(N²) thresholds but prevents ambiguous timeouts when users
+    # pass small bin_size on long recordings.
+    _MAX_BINS = 150_000
+    requested_bin = bin_size
+    n_bins_requested = data.duration / max(bin_size, 0.001)
+    if n_bins_requested > _MAX_BINS:
+        bin_size = max(data.duration / _MAX_BINS, 0.1)
+        logger.info(
+            "firing_rates.bin_widen duration=%.0fs requested_bin=%.3fs widened_bin=%.3fs spikes=%d",
+            data.duration, requested_bin, bin_size, data.n_spikes,
+        )
+
     result = await _run_heavy(compute_firing_rates, data, bin_size_sec=bin_size)
     result = _sanitize(result)
     if subsampled:
         result["_subsampled"] = True
         result["_subsampled_spikes"] = data.n_spikes
+    if bin_size != requested_bin:
+        result["_bin_widened"] = True
+        result["_bin_requested"] = requested_bin
+        result["_bin_actual"] = bin_size
     return result
 
 
