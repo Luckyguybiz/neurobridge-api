@@ -1404,11 +1404,11 @@ async def api_design_stimulus(dataset_id: str, generations: int = 15, population
 @app.get("/api/analysis/{dataset_id}/consciousness")
 async def api_consciousness(dataset_id: str, subset: Optional[str] = Query(None)):
     """Composite consciousness assessment score.
-    Internally calls IIT Phi (O(2^N)) + perturbational complexity +
-    transfer entropy — tightest cap of any endpoint because all three
-    heavyweights compound. 300s duration cap keeps 1h subset tractable
-    (IIT alone on full 1h slice has never returned)."""
-    data, _ = _get_dataset_capped(dataset_id, max_spikes=20_000, subset=subset, max_duration_sec=300)
+    Internally calls IIT Phi + PCI + transfer entropy — three heavies
+    compound. 120s cap + TE sub-call uses n_surrogates=30 (see
+    consciousness_metrics.py). Keeps total runtime under the 240s
+    very-heavy timeout on any input."""
+    data, _ = _get_dataset_capped(dataset_id, max_spikes=20_000, subset=subset, max_duration_sec=120)
     t0 = time.time()
     result = await _run_heavy(compute_consciousness_score, data, timeout_sec=_TIMEOUT_VERY_HEAVY_SEC)
     result["_computation_time_ms"] = (time.time() - t0) * 1000

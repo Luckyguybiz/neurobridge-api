@@ -58,9 +58,15 @@ def compute_perturbational_complexity(data: SpikeData, bin_size_ms: float = 10.0
     }
 
 def compute_recurrent_processing(data: SpikeData) -> dict:
-    """Measure recurrent (feedback) vs feedforward processing."""
+    """Measure recurrent (feedback) vs feedforward processing.
+
+    Passes n_surrogates=30 because this is a sub-call inside the
+    consciousness composite. Full significance testing isn't needed —
+    we only care about the TE matrix values for recurrence, not p-values.
+    30 surrogates × 1024 pairs = 30K calls, completes in ~25s on 300s data.
+    """
     from .connectivity import compute_transfer_entropy
-    te = compute_transfer_entropy(data)
+    te = compute_transfer_entropy(data, n_surrogates=30)
 
     matrix = np.array(getattr(te, 'te_matrix', None) if not isinstance(te, dict) else te.get("te_matrix", te.get("matrix", [[0]])))
     if matrix is None:
