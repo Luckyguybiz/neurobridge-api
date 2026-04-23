@@ -857,7 +857,7 @@ async def analyze_transfer_entropy(
     """Transfer entropy — directional information flow between electrodes."""
     import asyncio
     # 32² pairs × history_bins discrete states — tightest cap in this group
-    data, subsampled = _get_dataset_capped(dataset_id, max_spikes=20_000)
+    data, subsampled = _get_dataset_capped(dataset_id, max_spikes=10_000)
     raw = await _run_heavy(compute_transfer_entropy, data, bin_size_ms, history_bins)
     result = _sanitize(raw)
     if subsampled:
@@ -1122,7 +1122,7 @@ async def analyze_predictive_coding(dataset_id: str):
 async def analyze_weights(dataset_id: str):
     """Infer synaptic weight matrix from spike timing."""
     # O(N²) pairwise correlation — tightest cap
-    data, _ = _get_dataset_capped(dataset_id, max_spikes=20_000)
+    data, _ = _get_dataset_capped(dataset_id, max_spikes=10_000)
     return _sanitize(await _run_heavy(infer_synaptic_weights, data))
 
 
@@ -1131,7 +1131,7 @@ async def analyze_weight_tracking(dataset_id: str, window_sec: float = Query(30.
     """Track synaptic weight changes over time — watch learning happen."""
     try:
         # O(N²) per-window — tightest cap because windows multiply the work
-        data, _ = _get_dataset_capped(dataset_id, max_spikes=20_000)
+        data, _ = _get_dataset_capped(dataset_id, max_spikes=10_000)
         return _sanitize(await _run_heavy(track_weight_changes, data, window_sec=window_sec))
     except Exception as e:
         return {"error": str(e), "partial": True}
@@ -1194,8 +1194,8 @@ async def api_metastability(dataset_id: str):
 @app.get("/api/analysis/{dataset_id}/information-flow")
 async def api_information_flow(dataset_id: str):
     """Map directed information flow using Granger causality."""
-    # Granger is O(pairs × history) — tight cap
-    data, _ = _get_dataset_capped(dataset_id, max_spikes=20_000)
+    # Granger is O(pairs × history) — tightest cap
+    data, _ = _get_dataset_capped(dataset_id, max_spikes=10_000)
     t0 = time.time()
     result = await _run_heavy(compute_granger_causality, data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
@@ -1205,8 +1205,8 @@ async def api_information_flow(dataset_id: str):
 @app.get("/api/analysis/{dataset_id}/motifs")
 async def api_motifs(dataset_id: str):
     """Enumerate network motifs (3-node subgraph patterns)."""
-    # 3-node motif enumeration is O(V³) on the connectivity graph — tight cap
-    data, _ = _get_dataset_capped(dataset_id, max_spikes=20_000)
+    # 3-node motif enumeration is O(V³) on the connectivity graph — tightest cap
+    data, _ = _get_dataset_capped(dataset_id, max_spikes=10_000)
     t0 = time.time()
     result = await _run_heavy(enumerate_motifs, data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
@@ -2161,8 +2161,12 @@ def _get_dataset(dataset_id: str) -> SpikeData:
     raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found. Upload data first via POST /api/upload")
 
 
-# Auto-subsample for heavy endpoints: cap at MAX_SPIKES for O(N²) analyses
-_MAX_SPIKES_HEAVY = 50_000  # ~50K spikes — keeps O(N²) endpoints under 30s on VPS
+# Auto-subsample for heavy endpoints: cap at MAX_SPIKES for O(N²) analyses.
+# 20K is a compromise: keeps most pairwise analyses under 30s on the single-
+# worker VPS while still giving ~600 spikes per electrode on a 32-channel
+# MEA (enough for meaningful statistics). O(N²) endpoints like weights,
+# transfer-entropy, motifs, information-flow override this further down.
+_MAX_SPIKES_HEAVY = 20_000
 
 def _get_dataset_capped(dataset_id: str, max_spikes: int = _MAX_SPIKES_HEAVY) -> tuple[SpikeData, bool]:
     """Get dataset, auto-subsampling if too large for heavy analysis.
