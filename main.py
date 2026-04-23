@@ -338,10 +338,28 @@ _EVICTED_HISTORY = 64
 import asyncio as _asyncio
 _compute_semaphore = _asyncio.Semaphore(1)
 
+# Hard cap on a single heavy computation — 45s. Beyond that we abandon
+# the caller and release the semaphore so the rest of the queue progresses.
+# The underlying thread keeps running inside the Python process (asyncio
+# doesn't truly cancel threads), but it's now detached and its result is
+# discarded. Caller gets HTTP 504.
+_HEAVY_TIMEOUT_SEC = 45.0
+
+
 async def _run_heavy(func, *args, **kwargs):
-    """Run CPU-heavy function with semaphore — only 1 at a time."""
+    """Run CPU-heavy function with semaphore (max 1 at a time) and timeout."""
     async with _compute_semaphore:
-        return await _asyncio.to_thread(func, *args, **kwargs)
+        try:
+            return await _asyncio.wait_for(
+                _asyncio.to_thread(func, *args, **kwargs),
+                timeout=_HEAVY_TIMEOUT_SEC,
+            )
+        except _asyncio.TimeoutError:
+            logger.warning("heavy.timeout func=%s args=%d", getattr(func, "__name__", "?"), len(args))
+            raise HTTPException(
+                status_code=504,
+                detail=f"Analysis took longer than {int(_HEAVY_TIMEOUT_SEC)}s and was abandoned. Try a smaller dataset or a faster endpoint.",
+            )
 
 def _store_dataset(dataset_id: str, data: SpikeData) -> None:
     """Store dataset with auto-eviction to prevent OOM."""
