@@ -1126,7 +1126,7 @@ async def full_report(dataset_id: str):
 @app.get("/api/analysis/{dataset_id}/sleep-wake")
 async def api_sleep_wake(dataset_id: str):
     """Detect sleep-wake-like cycles in organoid activity."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
     result = await _run_heavy(analyze_sleep_wake, data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
@@ -1136,7 +1136,7 @@ async def api_sleep_wake(dataset_id: str):
 @app.get("/api/analysis/{dataset_id}/habituation")
 async def api_habituation(dataset_id: str):
     """Detect habituation — response decay to repeated patterns."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
     result = await _run_heavy(detect_repeated_patterns, data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
@@ -1146,7 +1146,7 @@ async def api_habituation(dataset_id: str):
 @app.get("/api/analysis/{dataset_id}/metastability")
 async def api_metastability(dataset_id: str):
     """Analyze metastability — brain-like state switching dynamics."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
     result = await _run_heavy(analyze_metastability, data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
@@ -1156,7 +1156,8 @@ async def api_metastability(dataset_id: str):
 @app.get("/api/analysis/{dataset_id}/information-flow")
 async def api_information_flow(dataset_id: str):
     """Map directed information flow using Granger causality."""
-    data = _get_dataset(dataset_id)
+    # Granger is O(pairs × history) — keep the tighter pairwise cap
+    data, _ = _get_dataset_capped(dataset_id, max_spikes=50_000)
     t0 = time.time()
     result = await _run_heavy(compute_granger_causality, data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
@@ -1166,7 +1167,8 @@ async def api_information_flow(dataset_id: str):
 @app.get("/api/analysis/{dataset_id}/motifs")
 async def api_motifs(dataset_id: str):
     """Enumerate network motifs (3-node subgraph patterns)."""
-    data = _get_dataset(dataset_id)
+    # 3-node motif enumeration is O(V³) on the connectivity graph — cap hard
+    data, _ = _get_dataset_capped(dataset_id, max_spikes=50_000)
     t0 = time.time()
     result = await _run_heavy(enumerate_motifs, data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
@@ -1176,7 +1178,8 @@ async def api_motifs(dataset_id: str):
 @app.get("/api/analysis/{dataset_id}/energy-landscape")
 async def api_energy_landscape(dataset_id: str):
     """Compute Ising model energy landscape."""
-    data = _get_dataset(dataset_id)
+    # Ising fit is expensive per-spike — tighter cap
+    data, _ = _get_dataset_capped(dataset_id, max_spikes=50_000)
     t0 = time.time()
     result = await _run_heavy(fit_ising_model, data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
@@ -1186,7 +1189,7 @@ async def api_energy_landscape(dataset_id: str):
 @app.post("/api/analysis/{dataset_id}/design-stimulus")
 async def api_design_stimulus(dataset_id: str, generations: int = 15, population_size: int = 10):
     """Evolve optimal stimulation protocol using digital twin."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
     result = await _run_heavy(evolve_protocol, data, generations=generations, population_size=population_size)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
@@ -1195,8 +1198,10 @@ async def api_design_stimulus(dataset_id: str, generations: int = 15, population
 
 @app.get("/api/analysis/{dataset_id}/consciousness")
 async def api_consciousness(dataset_id: str):
-    """Composite consciousness assessment score."""
-    data = _get_dataset(dataset_id)
+    """Composite consciousness assessment score.
+    Calls integrated information + state-space + predictive coding internally,
+    so it's one of the heaviest endpoints — use the tight cap."""
+    data, _ = _get_dataset_capped(dataset_id, max_spikes=50_000)
     t0 = time.time()
     result = await _run_heavy(compute_consciousness_score, data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
@@ -1206,7 +1211,7 @@ async def api_consciousness(dataset_id: str):
 @app.get("/api/analysis/{dataset_id}/comparative")
 async def api_comparative(dataset_id: str):
     """Compare organoid with reference neural systems."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
     result = await _run_heavy(compare_with_references, data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
