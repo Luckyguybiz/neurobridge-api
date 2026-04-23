@@ -617,7 +617,7 @@ async def list_datasets():
 @app.get("/api/datasets/{dataset_id}")
 async def get_dataset_info(dataset_id: str):
     """Get detailed info about a dataset."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     return data.to_dict()
 
 
@@ -630,7 +630,7 @@ async def get_spikes(
     limit: int = Query(10000, le=100000),
 ):
     """Get spike data with optional filtering."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
 
     el_list = [int(e) for e in electrodes.split(",")] if electrodes else None
     filtered = data.get_filtered(electrodes=el_list, start=start, end=end)
@@ -663,7 +663,7 @@ async def get_spikes(
 async def analyze_summary(dataset_id: str):
     """Full dataset summary — per-electrode stats, population metrics, quality."""
     import asyncio
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
     result = await _run_heavy(compute_full_summary, data)
     result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
@@ -733,7 +733,7 @@ async def analyze_spike_sorting(
     params: SpikeSortingParams = SpikeSortingParams(),
 ):
     """Spike sorting — cluster spikes by waveform shape."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     if data.waveforms is None or len(data.waveforms) == 0:
         raise HTTPException(status_code=400, detail="Dataset has no waveform data. Upload data with waveforms for spike sorting.")
     return sort_spikes(data.waveforms, method=params.method, n_components=params.n_components, n_clusters=params.n_clusters, min_cluster_size=params.min_cluster_size)
@@ -1258,7 +1258,7 @@ async def api_protocol_detail(name: str):
 @app.get("/api/analysis/{dataset_id}/suggest-protocol")
 async def api_suggest_protocol(dataset_id: str):
     """Suggest best protocol based on organoid state."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     return suggest_protocol(data)
 
 
@@ -1274,7 +1274,7 @@ async def api_closed_loop(
     game: str = Query("pong"),
 ):
     """Run DishBrain-style closed-loop session (pong or cartpole)."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
     result = run_dishbrain_session(data, n_episodes=n_episodes, reward_strategy=reward_strategy, game=game)
     result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
@@ -1288,7 +1288,7 @@ async def api_cartpole(
     reward_strategy: str = Query("dopamine"),
 ):
     """CartPole benchmark adapted for biological neural networks."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
     result = run_cartpole_benchmark(data, n_trials=n_trials, reward_strategy=reward_strategy)
     result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
@@ -1298,7 +1298,7 @@ async def api_cartpole(
 @app.get("/api/experiments/{dataset_id}/closed-loop/strategies")
 async def api_compare_strategies(dataset_id: str, n_episodes: int = Query(15, ge=5, le=50)):
     """Compare all 4 reward strategies (hebbian/dopamine/contrastive/reinforce)."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
     result = compare_reward_strategies(data, n_episodes=n_episodes)
     result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
@@ -1310,7 +1310,7 @@ async def api_compare_strategies(dataset_id: str, n_episodes: int = Query(15, ge
 @app.get("/api/experiments/{dataset_id}/curriculum")
 async def api_curriculum(dataset_id: str):
     """Run full 4-stage adaptive curriculum learning protocol."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
     result = run_curriculum(data)
     result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
@@ -1320,7 +1320,7 @@ async def api_curriculum(dataset_id: str):
 @app.get("/api/experiments/{dataset_id}/curriculum/stage")
 async def api_curriculum_stage(dataset_id: str):
     """Assess which curriculum stage the organoid is ready for."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     return _sanitize(get_current_stage(data))
 
 
@@ -1331,7 +1331,7 @@ async def api_curriculum_simulate(
     n_trials: int = Query(30, ge=10, le=100),
 ):
     """Simulate a single curriculum stage with trial-by-trial output."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
     result = simulate_stage(data, stage=stage, n_trials=n_trials)
     result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
@@ -1343,7 +1343,7 @@ async def api_curriculum_simulate(
 @app.get("/api/experiments/{dataset_id}/memory")
 async def api_memory_battery(dataset_id: str):
     """Run complete memory battery: working + short-term + long-term + associative."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
     result = run_memory_battery(data)
     result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
@@ -1353,28 +1353,28 @@ async def api_memory_battery(dataset_id: str):
 @app.get("/api/experiments/{dataset_id}/memory/working")
 async def api_memory_working(dataset_id: str, n_trials: int = Query(40, ge=10, le=100)):
     """Delay-match-to-sample working memory test."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     return _sanitize(test_working_memory(data, n_trials=n_trials))
 
 
 @app.get("/api/experiments/{dataset_id}/memory/short-term")
 async def api_memory_stm(dataset_id: str, max_span: int = Query(9, ge=3, le=15)):
     """Serial-span short-term memory test."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     return _sanitize(test_short_term_memory(data, max_span=max_span))
 
 
 @app.get("/api/experiments/{dataset_id}/memory/long-term")
 async def api_memory_ltm(dataset_id: str, n_patterns: int = Query(5, ge=2, le=20)):
     """Spaced-retention long-term memory test."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     return _sanitize(test_long_term_memory(data, n_patterns=n_patterns))
 
 
 @app.get("/api/experiments/{dataset_id}/memory/associative")
 async def api_memory_am(dataset_id: str, n_pairs: int = Query(6, ge=2, le=20)):
     """Paired-associate / Hopfield-style associative memory test."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     return _sanitize(test_associative_memory(data, n_pairs=n_pairs))
 
 
@@ -1389,7 +1389,7 @@ async def api_pong(
     reward_rule: str = Query("dishbrain"),
 ):
     """Simulate N games of Pong using organoid spike data as controller."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
     result = simulate_pong(data, n_games=n_games, encoding=encoding, decoding=decoding, reward_rule=reward_rule)
     result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
@@ -1418,7 +1418,7 @@ async def api_xor_benchmark(
     readout: str = Query("logistic"),
 ):
     """Run full logical gate benchmark suite (AND, OR, XOR, NAND, XNOR)."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
     result = run_full_benchmark(data, n_trials_per_gate=n_trials_per_gate, readout=readout)
     result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
@@ -1433,7 +1433,7 @@ async def api_xor_gate(
     readout: str = Query("logistic"),
 ):
     """Run a single logical gate benchmark."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
     result = run_gate_benchmark(data, gate=gate.upper(), n_trials=n_trials, readout=readout)
     result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
@@ -1443,7 +1443,7 @@ async def api_xor_gate(
 @app.get("/api/experiments/{dataset_id}/xor/difficulty")
 async def api_xor_difficulty(dataset_id: str):
     """Estimate XOR difficulty for this organoid (Fisher discriminant)."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     return _sanitize(compute_xor_difficulty(data))
 
 
@@ -1508,7 +1508,7 @@ async def api_tracker_start(
     experiment_type: str = Query("stimulation"),
 ):
     """Start a new experiment — record pre-intervention baseline."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     return _sanitize(start_experiment(experiment_id, data, name=name, experiment_type=experiment_type))
 
 
@@ -1519,7 +1519,7 @@ async def api_tracker_end(
     notes: Optional[str] = None,
 ):
     """End experiment — record post-intervention and compute delta."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     return _sanitize(end_experiment(experiment_id, data, notes=notes))
 
 
@@ -1554,7 +1554,7 @@ async def api_tracker_delta(pre_dataset_id: str, post_dataset_id: str):
 @app.post("/api/publish/{dataset_id}")
 async def api_publish_draft(dataset_id: str):
     """Generate full paper draft (title, abstract, methods, results, discussion)."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
     result = generate_draft(data, analyses={})
     result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
@@ -1564,14 +1564,14 @@ async def api_publish_draft(dataset_id: str):
 @app.post("/api/publish/{dataset_id}/abstract")
 async def api_publish_abstract(dataset_id: str):
     """Generate abstract only — fast 250-word structured abstract."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     return _sanitize(generate_abstract_only(data, analyses={}))
 
 
 @app.post("/api/publish/{dataset_id}/methods")
 async def api_publish_methods(dataset_id: str):
     """Generate methods section only."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     return _sanitize(generate_methods_section(data, analyses={}))
 
 
@@ -1584,7 +1584,7 @@ async def api_ethics(
     organoid_type: Optional[str] = None,
 ):
     """Full ethical assessment: consciousness indicators, sentience risk, guidelines, compliance."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
     result = assess_ethics(data, culture_age_days=culture_age_days, organoid_type=organoid_type)
     result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
@@ -1594,14 +1594,14 @@ async def api_ethics(
 @app.get("/api/analysis/{dataset_id}/consciousness")
 async def api_consciousness_indicators(dataset_id: str):
     """Consciousness proxy indicators: Phi, global workspace, criticality, complexity."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     return _sanitize(assess_consciousness_indicators(data))
 
 
 @app.get("/api/analysis/{dataset_id}/sentience-risk")
 async def api_sentience_risk(dataset_id: str):
     """Sentience risk score: nociception proxy, stress, valence, distress signals."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     return _sanitize(compute_sentience_risk_score(data))
 
 
@@ -1623,7 +1623,7 @@ async def api_funding_match_with_data(
     min_funding_usd: Optional[int] = None,
 ):
     """Match grants using actual organoid data for scoring."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     return _sanitize(match_grants(data=data, analyses={}, country_filter=country_filter, min_funding_usd=min_funding_usd))
 
 
@@ -1647,7 +1647,7 @@ async def api_funding_grant_detail(grant_id: str):
 @app.get("/api/analysis/{dataset_id}/turing-test")
 async def api_turing_test(dataset_id: str):
     """Run organoid Turing test — compare real data vs Poisson and LIF models."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
     result = run_turing_test(data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
@@ -1657,7 +1657,7 @@ async def api_turing_test(dataset_id: str):
 @app.post("/api/analysis/{dataset_id}/architecture-search")
 async def api_architecture_search(dataset_id: str, generations: int = 15, population_size: int = 10):
     """Neural Architecture Search for optimal stimulation protocol."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
     result = search_optimal_protocol(data, population_size=population_size, generations=generations)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
@@ -1667,7 +1667,7 @@ async def api_architecture_search(dataset_id: str, generations: int = 15, popula
 @app.get("/api/analysis/{dataset_id}/hybrid-benchmark")
 async def api_hybrid_benchmark(dataset_id: str):
     """Benchmark hybrid bio-digital AI vs pure digital vs pure biological."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
     result = benchmark_hybrid(data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
@@ -1679,7 +1679,7 @@ async def api_hybrid_benchmark(dataset_id: str):
 @app.get("/api/analysis/{dataset_id}/forgetting")
 async def api_forgetting(dataset_id: str):
     """Measure catastrophic forgetting — do early patterns survive?"""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
     result = compute_retention_curve(data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
@@ -1689,7 +1689,7 @@ async def api_forgetting(dataset_id: str):
 @app.get("/api/analysis/{dataset_id}/channel-capacity")
 async def api_channel_capacity(dataset_id: str):
     """Estimate information channel capacity (multi-bit memory)."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
     result = estimate_channel_capacity(data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
@@ -1699,7 +1699,7 @@ async def api_channel_capacity(dataset_id: str):
 @app.get("/api/analysis/{dataset_id}/population-codes")
 async def api_population_codes(dataset_id: str):
     """Measure population code diversity (distinct neural states)."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
     result = measure_population_code_diversity(data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
@@ -1709,7 +1709,7 @@ async def api_population_codes(dataset_id: str):
 @app.get("/api/analysis/{dataset_id}/topology")
 async def api_topology(dataset_id: str):
     """Compute Betti numbers (topological data analysis)."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
     result = compute_betti_numbers(data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
@@ -1719,7 +1719,7 @@ async def api_topology(dataset_id: str):
 @app.get("/api/analysis/{dataset_id}/topological-complexity")
 async def api_topo_complexity(dataset_id: str):
     """Compute topological complexity score."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
     result = compute_topological_complexity(data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
@@ -1729,7 +1729,7 @@ async def api_topo_complexity(dataset_id: str):
 @app.get("/api/analysis/{dataset_id}/consolidation")
 async def api_consolidation(dataset_id: str):
     """Detect memory consolidation events during offline periods."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
     result = detect_consolidation_events(data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
@@ -1739,7 +1739,7 @@ async def api_consolidation(dataset_id: str):
 @app.get("/api/analysis/{dataset_id}/transfer")
 async def api_transfer(dataset_id: str):
     """Measure transfer learning between recording segments."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
     result = measure_transfer(data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
@@ -1749,7 +1749,7 @@ async def api_transfer(dataset_id: str):
 @app.get("/api/analysis/{dataset_id}/rsa")
 async def api_rsa(dataset_id: str):
     """Representational Similarity Analysis."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
     result = compute_representational_similarity(data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
@@ -1761,7 +1761,7 @@ async def api_rsa(dataset_id: str):
 @app.get("/api/analysis/{dataset_id}/connectome")
 async def api_connectome(dataset_id: str):
     """Build full functional connectome with graph theory metrics."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
     result = build_full_connectome(data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
@@ -1771,7 +1771,7 @@ async def api_connectome(dataset_id: str):
 @app.get("/api/analysis/{dataset_id}/communities")
 async def api_communities(dataset_id: str):
     """Detect network communities (modules) via spectral clustering."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
     result = detect_communities(data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
@@ -1781,7 +1781,7 @@ async def api_communities(dataset_id: str):
 @app.get("/api/analysis/{dataset_id}/graph-theory")
 async def api_graph_theory(dataset_id: str):
     """Compute rich-club, small-world, efficiency, betweenness centrality."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
     result = compute_graph_theory_metrics(data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
@@ -1791,7 +1791,7 @@ async def api_graph_theory(dataset_id: str):
 @app.get("/api/analysis/{dataset_id}/effective-connectivity")
 async def api_effective_connectivity(dataset_id: str):
     """Estimate directed causal connections (effective connectivity)."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
     result = estimate_effective_connectivity(data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
@@ -1801,7 +1801,7 @@ async def api_effective_connectivity(dataset_id: str):
 @app.get("/api/analysis/{dataset_id}/causal-hierarchy")
 async def api_causal_hierarchy(dataset_id: str):
     """Order electrodes by causal influence hierarchy."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
     result = compute_causal_hierarchy(data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
@@ -1813,7 +1813,7 @@ async def api_causal_hierarchy(dataset_id: str):
 @app.post("/api/analysis/{dataset_id}/evolve-programs")
 async def api_evolve_programs(dataset_id: str, generations: int = 20):
     """Genetic programming — evolve stimulation program trees."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
     result = evolve_programs(data, generations=generations)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
@@ -1823,7 +1823,7 @@ async def api_evolve_programs(dataset_id: str, generations: int = 20):
 @app.get("/api/analysis/{dataset_id}/homeostasis")
 async def api_homeostasis(dataset_id: str):
     """Monitor homeostatic plasticity — firing rate self-regulation."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
     result = monitor_homeostasis(data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
@@ -1833,7 +1833,7 @@ async def api_homeostasis(dataset_id: str):
 @app.get("/api/analysis/{dataset_id}/suffering")
 async def api_suffering(dataset_id: str):
     """Detect distress/suffering patterns — ethical monitoring."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
     result = detect_suffering(data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
@@ -1843,7 +1843,7 @@ async def api_suffering(dataset_id: str):
 @app.get("/api/analysis/{dataset_id}/welfare")
 async def api_welfare(dataset_id: str):
     """Generate comprehensive welfare report."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
     result = generate_welfare_report(data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
@@ -1853,7 +1853,7 @@ async def api_welfare(dataset_id: str):
 @app.get("/api/analysis/{dataset_id}/swarm")
 async def api_swarm(dataset_id: str, n_organoids: int = 4):
     """Simulate multi-organoid swarm intelligence."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
     result = simulate_swarm(data, n_organoids=n_organoids)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
@@ -1863,7 +1863,7 @@ async def api_swarm(dataset_id: str, n_organoids: int = 4):
 @app.get("/api/analysis/{dataset_id}/morphology")
 async def api_morphology(dataset_id: str):
     """Analyze morphological computing — structure vs function."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
     result = analyze_morphological_computation(data)
     result["_computation_time_ms"] = (time.time() - t0) * 1000
@@ -1946,7 +1946,7 @@ async def analyze_multi_organoid(
     electrodes_per_organoid: int = Query(8, ge=1, le=32, description="Electrodes per virtual organoid"),
 ):
     """Compare multiple virtual organoids from a multi-MEA dataset."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     cached = _cache_get(dataset_id, f"multi-organoid-{electrodes_per_organoid}")
     if cached:
         return cached
@@ -1966,7 +1966,7 @@ async def analyze_temporal_evolution(
     mode: str = Query("full", description="Mode: full, trends, critical"),
 ):
     """Track how organoid properties evolve over time."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
     if mode == "trends":
         result = detect_trends(data, window_sec=window_sec)
@@ -1994,7 +1994,7 @@ async def analyze_stim_response(
     window_ms: float = Query(200.0, ge=10.0, le=5000.0, description="Post-stimulus window in ms"),
 ):
     """Analyze organoid response to stimulation events."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
 
     if stim_times:
@@ -2030,7 +2030,7 @@ async def analyze_llm_optimize(
     objective: str = Query("maximize_complexity", description="Optimization objective"),
 ):
     """Run LLM-in-the-loop protocol optimization (simulated)."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
     result = run_optimization_loop(data, n_iterations=n_iterations, objective=objective)
     result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
@@ -2042,7 +2042,7 @@ async def analyze_llm_optimize(
 @app.post("/api/protocols/center-activity/{dataset_id}/simulate")
 async def protocol_center_activity(dataset_id: str, n_steps: int = Query(20)):
     """Center of Activity Protocol -- shift neural activity via distant electrode stimulation."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
     ca = compute_center_of_activity(data)
     shift = simulate_ca_shift(data, n_steps=n_steps)
@@ -2054,7 +2054,7 @@ async def protocol_center_activity(dataset_id: str, n_steps: int = Query(20)):
 @app.post("/api/protocols/dishbrain-pong/{dataset_id}/simulate")
 async def protocol_dishbrain_pong(dataset_id: str, n_trials: int = Query(100)):
     """DishBrain Pong Protocol -- train organoid to play Pong via free energy principle."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
     result = simulate_pong_game(data, n_trials=n_trials)
     result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
@@ -2064,7 +2064,7 @@ async def protocol_dishbrain_pong(dataset_id: str, n_trials: int = Query(100)):
 @app.post("/api/protocols/brainoware/{dataset_id}/simulate")
 async def protocol_brainoware(dataset_id: str, n_classes: int = Query(4), n_samples: int = Query(100)):
     """Brainoware Reservoir Computing -- organoid as nonlinear reservoir for classification."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
     result = simulate_reservoir_classification(data, n_classes=n_classes, n_samples=n_samples)
     result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
@@ -2074,7 +2074,7 @@ async def protocol_brainoware(dataset_id: str, n_classes: int = Query(4), n_samp
 @app.post("/api/protocols/cartpole/{dataset_id}/simulate")
 async def protocol_cartpole(dataset_id: str, n_episodes: int = Query(50), max_steps: int = Query(200)):
     """Cart-Pole Coaching -- balance inverted pendulum with adaptive coaching."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
     result = simulate_cartpole(data, n_episodes=n_episodes, max_steps=max_steps)
     result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
@@ -2084,7 +2084,7 @@ async def protocol_cartpole(dataset_id: str, n_episodes: int = Query(50), max_st
 @app.post("/api/protocols/dopamine/{dataset_id}/simulate")
 async def protocol_dopamine(dataset_id: str, n_trials: int = Query(100)):
     """Dopamine UV Reinforcement -- chemical reward via UV-activated dopamine release."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     t0 = time.time()
     result = simulate_dopamine_training(data, n_trials=n_trials)
     result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
@@ -2101,7 +2101,7 @@ async def export_csv(
     electrodes: Optional[str] = None,
 ):
     """Export spike data as CSV."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     el_list = [int(e) for e in electrodes.split(",")] if electrodes else None
     filtered = data.get_filtered(electrodes=el_list, start=start, end=end)
     df = filtered.to_dataframe()
@@ -2121,7 +2121,7 @@ async def export_csv(
 @app.get("/api/export/{dataset_id}/json")
 async def export_json(dataset_id: str):
     """Export full dataset as JSON."""
-    data = _get_dataset(dataset_id)
+    data, _ = _get_dataset_capped(dataset_id)
     return data.to_dict()
 
 
