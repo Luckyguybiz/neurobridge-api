@@ -1,15 +1,21 @@
 """Common-mode artifact detection and rejection for MEA spike data.
 
-Multi-well MEA recordings (e.g. FinalSpark's 4-well plates) pick up
-electrical/mechanical transients that appear *synchronously* across electrodes
-that are not biologically connected — pump strokes, incubator door, electrical
-pickup, vibration. These show up as high-amplitude "spikes" that coincide to
-within a sample across many electrodes at once.
+MEA recordings pick up electrical/mechanical transients that appear
+*synchronously* across electrodes — pump strokes, incubator door, electrical
+pickup, vibration. These show up as high-amplitude "spikes" that land many
+electrodes on (near) the same sample at once.
 
-Because the wells (MEAs) are physically isolated, *any* sub-millisecond
-coincidence between two different wells is non-biological by construction —
-there is no axon between them. That gives a model-free ground truth for
-artifact: cross-well synchrony.
+The model-free signature of common-mode is coincidence at the *exact same
+sample*, skewed to high amplitude, often recruiting many electrode groups at
+once. Independent neural firing does not put different electrode groups on the
+identical 30 kHz sample at any appreciable rate. This holds whether the groups
+are separate wells OR co-housed organoids on one chip that share a reference /
+ground / conductive medium. NOTE on FinalSpark fs437 specifically: it is
+4 organoids on a SINGLE MEA in a shared medium chamber on a common ground, so
+cross-group coincidence there is *expected* common-mode pickup — a data-quality
+issue to clean before connectivity, NOT a novel finding. Cross-channel/
+common-mode coincidence is a standard MEA artifact category; the usual remedy is
+a common-average reference (CAR) or coincidence filter.
 
 This module detects such artifacts two ways:
 
@@ -18,19 +24,19 @@ This module detects such artifacts two ways:
    once. Genuine network bursts recruit electrodes over tens of ms; common-mode
    transients hit everything within one bin.
 
-2. **Cross-group coincidence** (needs a grouping, e.g. electrode → well): flag
+2. **Cross-group coincidence** (needs a grouping, e.g. electrode → group): flag
    spikes that coincide within ±`window_ms` with spikes on a *different* group.
-   For physically separate wells this is, by construction, not biology.
+   The discriminating evidence is the *exact-sample* (lag-0) concentration and
+   amplitude skew — not an assumption of physical isolation.
 
 Empirically on FinalSpark fs437 the two agree and the artifact population is
-cleanly separated in amplitude (≈90% of >300 µV spikes are cross-well
+cleanly separated in amplitude (≈90% of >300 µV spikes are cross-group
 coincident vs ≈4% of <50 µV spikes), so the report includes the
 amplitude dissociation as a built-in sanity check.
 
 References:
 - Common-average referencing / common-mode rejection is standard in
   multi-electrode electrophysiology (e.g. Ludwig et al. 2009, J Neurophysiol).
-- The cross-well-coincidence ground truth is specific to multi-well plates.
 """
 
 from __future__ import annotations
