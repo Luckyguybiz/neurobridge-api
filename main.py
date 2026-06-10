@@ -28,13 +28,15 @@ logger = logging.getLogger("neurobridge")
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse
 import numpy as np
 
 from analysis.loader import SpikeData, load_file
 from analysis.spikes import compute_isi, compute_firing_rates, compute_amplitude_stats, sort_spikes
 from analysis.bursts import analyze_bursts as detect_bursts, detect_bursts_max_interval as detect_single_channel_bursts, detect_network_bursts as compute_burst_profiles
 from analysis.connectivity import compute_cross_correlation, compute_connectivity_graph, compute_transfer_entropy, connectivity_to_dict
+from analysis.artifact_rejection import detect_common_mode_artifacts, artifacts_to_dict
+from analysis.integrity_report import generate_integrity_report
 from analysis.stats import compute_full_summary, compute_temporal_dynamics, compute_quality_metrics
 from analysis.information_theory import compute_spike_train_entropy, compute_mutual_information, compute_lempel_ziv_complexity
 from analysis.spectral import compute_power_spectrum, compute_coherence
@@ -998,6 +1000,54 @@ async def analyze_cross_correlation(
     if subsampled:
         result["_subsampled"] = True
     return result
+
+
+@app.get("/api/analysis/{dataset_id}/artifacts")
+async def analyze_artifacts(
+    dataset_id: str,
+    window_ms: float = Query(2.0, ge=0.1, le=50.0),
+    group_size: int = Query(0, ge=0, description="Electrodes per well (FinalSpark=8). 0=auto: 8 if 32 electrodes, else population-synchrony only."),
+    subset: Optional[str] = Query(None),
+):
+    """Common-mode artifact detection — flags cross-well-synchronous transients.
+
+    Multi-well plates pick up electrical/mechanical transients that fire across
+    physically isolated wells within a sample. Since there is no axon between
+    wells, any sub-ms cross-well coincidence is non-biological by construction —
+    a model-free ground truth for artifact. Returns per-well artifact fractions,
+    the amplitude dissociation, and an enrichment-over-chance verdict. Recompute
+    connectivity/complexity on cleaned data if the verdict says CONTAMINATED.
+    """
+    # MUST NOT subsample by spike (would destroy coincidence structure); cap by
+    # DURATION instead — artifact fraction is stationary across a slice.
+    data, subsampled = _get_dataset_capped(dataset_id, max_spikes=10_000_000, subset=subset, max_duration_sec=3600)
+    gs = group_size or (8 if data.n_electrodes == 32 else None)
+    t0 = time.time()
+    raw = await _run_heavy(detect_common_mode_artifacts, data, window_ms, gs, timeout_sec=_TIMEOUT_HEAVY_SEC)
+    result = _sanitize(artifacts_to_dict(raw))
+    result["_computation_time_ms"] = round((time.time() - t0) * 1000, 1)
+    if subsampled:
+        result["_duration_capped"] = True
+    return result
+
+
+@app.get("/api/analysis/{dataset_id}/integrity-report", response_class=HTMLResponse)
+async def integrity_report(
+    dataset_id: str,
+    name: str = Query("MEA dataset", description="Dataset display name for the report header"),
+    window_ms: float = Query(2.0, ge=0.1, le=50.0),
+    group_size: int = Query(0, ge=0),
+    subset: Optional[str] = Query(None),
+):
+    """Client-ready MEA Data Integrity Report (self-contained HTML, prints to PDF).
+
+    The deliverable for the data-QC line of business — a branded, automatic audit
+    of common-mode contamination. Open in a browser and Print → Save as PDF.
+    """
+    data, _ = _get_dataset_capped(dataset_id, max_spikes=10_000_000, subset=subset, max_duration_sec=3600)
+    gs = group_size or (8 if data.n_electrodes == 32 else None)
+    html_doc = await _run_heavy(generate_integrity_report, data, name, gs, timeout_sec=_TIMEOUT_HEAVY_SEC)
+    return HTMLResponse(content=html_doc)
 
 
 @app.get("/api/analysis/{dataset_id}/transfer-entropy")
